@@ -1,4 +1,4 @@
-import { Link } from 'expo-router';
+import { Link, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
@@ -7,6 +7,12 @@ import { confirmDestructive } from '@/components/confirm';
 import { ThemedText } from '@/components/themed-text';
 import { NotePalette, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
+import { markdownToNote } from '@/notes/markdown';
+import { markdownFilesSupported, pickMarkdown } from '@/notes/markdown-files';
+import { createNote, withBody, withTitle } from '@/notes/model';
+import { useNotes } from '@/notes/notes-context';
+import { submitNote } from '@/notes/pending-notes';
+import { contentOfDoc } from '@/notes/rich-text';
 import { useThemePreference, type ThemePreference } from '@/theme/theme-preference';
 import { useVault } from '@/vault/vault-context';
 
@@ -40,6 +46,8 @@ export default function SettingsScreen() {
           ))}
         </View>
       </View>
+
+      {markdownFilesSupported && <ImportSection />}
 
       <VaultSection />
 
@@ -145,3 +153,43 @@ const styles = StyleSheet.create({
   flex: { flex: 1 },
   highlight: { paddingHorizontal: Spacing.two, borderRadius: 4 },
 });
+
+function ImportSection() {
+  const router = useRouter();
+  const { store } = useNotes();
+  const [error, setError] = useState<string | null>(null);
+
+  const importMarkdown = async () => {
+    if (!store) return;
+    setError(null);
+    try {
+      const picked = await pickMarkdown();
+      if (!picked) return;
+      const { title, doc } = markdownToNote(picked.markdown, picked.name);
+      const now = Date.now();
+      const note = withBody(withTitle(createNote(now), title, now), contentOfDoc(doc), now);
+      // Si le coffre s'est verrouillé pendant le choix du fichier, la note est
+      // enregistrée au prochain déverrouillage et cet écran n'existe plus.
+      if (await submitNote(note)) {
+        router.push({ pathname: '/note/[id]', params: { id: note.id } });
+      }
+    } catch (cause) {
+      setError(`Le fichier n'a pas pu être importé : ${String(cause)}`);
+    }
+  };
+
+  return (
+    <View style={styles.section}>
+      <ThemedText type="subtitle">Import</ThemedText>
+      <ThemedText themeColor="textSecondary" type="small">
+        Crée une note à partir d&apos;un fichier Markdown (.md).
+      </ThemedText>
+      <Button label="Importer un fichier Markdown" disabled={!store} onPress={importMarkdown} />
+      {error && (
+        <ThemedText themeColor="danger" type="small">
+          {error}
+        </ThemedText>
+      )}
+    </View>
+  );
+}

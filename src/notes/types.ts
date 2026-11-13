@@ -20,6 +20,9 @@ export type Note = {
   deletedAt: number | null;
 };
 
+/** Contenu d'une note tel que l'éditeur le fournit. */
+export type BodyContent = Pick<Note, 'body' | 'bodyFormat' | 'plainText'>;
+
 export type NoteSummary = Pick<
   Note,
   'id' | 'title' | 'categoryId' | 'archived' | 'updatedAt' | 'deletedAt'

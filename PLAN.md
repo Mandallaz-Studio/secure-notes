@@ -1,7 +1,7 @@
 # Secure Notes — plan de développement
 
 > Document de reprise pour les prochaines sessions. Dernière mise à jour : 2026-11-13.
-> État : **phases 0, 1 et 2 terminées**. Prochaine étape : phase 3 (éditeur).
+> État : **phases 0 à 3 terminées**. Prochaine étape : phase 4 (synchro Supabase).
 
 ## 1. Objectif
 
@@ -147,7 +147,7 @@ Chaque phase tient en principe en une session et se termine par un résultat vé
 - [x] Phase 0 — Fondations (voir « Bilan de la phase 0 »)
 - [x] Phase 1 — Crypto et création du coffre (voir « Bilan de la phase 1 »)
 - [x] Phase 2 — Notes locales
-- [ ] Phase 3 — Éditeur
+- [x] Phase 3 — Éditeur
 - [ ] Phase 4 — Synchro Supabase
 - [ ] Phase 5 — Pièces jointes et images
 - [ ] Phase 6 — Partage par lien
@@ -305,6 +305,72 @@ Choix faits :
 - Une catégorie par note. Une note vide n'est pas conservée.
 - Recherche insensible à la casse et aux accents via une colonne `search_text`.
 - Sur le web, les notes ne vivent qu'en mémoire.
+
+### Bilan de la phase 3 (terminée le 2026-11-13, sur Android)
+
+Fait :
+- `src/components/note-body.tsx` : corps de la note dans l'éditeur riche (TenTap),
+  avec une barre d'outils maison au-dessus du clavier : annuler/rétablir, gras,
+  italique, souligné, barré, code, titres 1 à 3, listes à puces, numérotées et de
+  tâches, citation, 5 couleurs de texte, 4 surlignages. Variante web
+  (`note-body.web.tsx`) : champ de texte brut.
+- `src/notes/rich-text.ts` : couleurs stockées en jetons (`palette:red`), converties
+  en teinte du thème à l'affichage ; texte brut extrait pour l'aperçu et la recherche.
+- `src/notes/markdown.ts` : conversion document ↔ Markdown.
+  `src/notes/markdown-files.ts` : export par la feuille de partage (bouton « Exporter »
+  de la note), import par le sélecteur de fichiers (Réglages → Import).
+- `src/notes/pending-notes.ts` : une note importée pendant que le coffre se verrouille
+  attend en mémoire et est enregistrée au déverrouillage suivant.
+- Une note en texte brut (phase 2) s'ouvre dans l'éditeur et passe au format `tiptap`
+  à la première modification ; l'ouvrir sans la modifier ne la touche pas.
+- 72 tests Jest (26 nouveaux) ; types et lint passent.
+
+Vérifié sur l'émulateur Android :
+- Raccourcis Markdown à la frappe : `# `, `**gras**`, `*italique*`, `~~barré~~`, `- `,
+  `> `.
+- Barre d'outils : souligné, titre 2, liste numérotée, liste de tâches, couleurs de
+  texte, surlignage.
+- La mise en forme survit à la fermeture de la note ; l'aperçu de la liste montre le
+  texte.
+- Thème : la même note prend les teintes sombres ou claires, y compris quand le thème
+  change pendant qu'elle est ouverte.
+- Export : la feuille de partage propose `<titre>.md`, au contenu correct.
+- Import : titres, marques, listes imbriquées, liste de tâches, citation.
+- Import pendant un verrouillage automatique (plus de 30 s dans le sélecteur) : la
+  note est bien là après le déverrouillage. Cela confirme au passage le verrouillage
+  automatique de la phase 1.
+
+Non vérifié :
+- iOS (pas de Mac).
+- L'envoi réel du fichier exporté à une autre app (seule la feuille de partage a été
+  vue) et la suppression différée du fichier temporaire.
+- Italique, code, titres 1 et 3, citation depuis la barre d'outils (vus seulement via
+  les raccourcis ou l'import), annuler/rétablir, liens.
+
+Limites connues :
+- Markdown : la couleur du texte est perdue à l'export ; le surlignage revient en
+  jaune à l'import. L'éditeur n'a ni bloc de code ni ligne de séparation : un bloc de
+  code importé devient un paragraphe en police de code, les séparations sont ignorées.
+- Les frappes du dernier quart de seconde avant un retour arrière peuvent ne pas être
+  enregistrées (le contenu est lu dans la WebView avec un léger délai). Archiver,
+  Corbeille et Exporter lisent l'éditeur avant d'agir.
+- Avec le clavier ouvert, la barre Archiver / Corbeille reste affichée et réduit la
+  zone d'édition.
+- L'export quitte le coffre **en clair** ; sa copie dans le cache de l'app est
+  supprimée 2 minutes après le partage, au prochain export ou au prochain lancement.
+
+Constats à retenir :
+- Nouvelles dépendances natives : `expo-file-system`, `expo-sharing`,
+  `expo-document-picker` (l'APK de développement a été reconstruit). `expo install` a
+  ajouté le plugin `expo-sharing` dans `app.json`.
+- npm 12 avale les options passées après `npx expo …` : lancer
+  `./node_modules/.bin/expo run:android --no-bundler` et `npm run lint`.
+- Fast Refresh ne suit plus après un passage de l'app en arrière-plan : recharger
+  l'app (ce qui verrouille le coffre) pour être sûr de tester le code courant.
+- Le bouton flottant des outils de développement recouvre le coin haut droit
+  (« Réglages », « Exporter ») sur l'émulateur.
+- Le navigateur n'est plus utilisé pour vérifier l'app (décision de l'utilisateur) :
+  le web ne servira qu'à la page de lecture des liens partagés.
 
 ## 5. Points d'attention
 

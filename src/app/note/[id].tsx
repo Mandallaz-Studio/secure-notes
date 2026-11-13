@@ -3,6 +3,7 @@ import { useHeaderHeight } from 'expo-router/react-navigation';
 import { useEffect, useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
+  Pressable,
   ScrollView,
   StyleSheet,
   TextInput,
@@ -13,6 +14,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Button } from '@/components/button';
 import { Chip } from '@/components/chip';
 import { confirmDestructive } from '@/components/confirm';
+import { NoteBody } from '@/components/note-body';
+import type { NoteBodyHandle } from '@/components/note-body.types';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
@@ -23,10 +26,14 @@ import {
   restored,
   trashed,
   withArchived,
+  withBody,
   withCategory,
-  withText,
+  withTitle,
 } from '@/notes/model';
+import { noteToMarkdown } from '@/notes/markdown';
+import { markdownFilesSupported, shareMarkdown } from '@/notes/markdown-files';
 import { useCategories, useNotes } from '@/notes/notes-context';
+import { docOfContent } from '@/notes/rich-text';
 import type { Note, NoteStore } from '@/notes/types';
 
 /** Délai entre la dernière frappe et l'enregistrement. */
@@ -139,8 +146,17 @@ function NoteEditor({ initial, isNew, store, onChanged }: NoteEditorProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- uniquement à la fermeture
   }, []);
 
-  const leaveAfter = async (next: Note) => {
-    await update(next, true);
+  const bodyRef = useRef<NoteBodyHandle>(null);
+
+  /** Dernier état de la note, avec ce que l'éditeur n'a pas encore transmis. */
+  const currentNote = async (): Promise<Note> => {
+    const content = await bodyRef.current?.read();
+    const base = latest.current;
+    return content && content.body !== base.body ? withBody(base, content, Date.now()) : base;
+  };
+
+  const leaveAfter = async (change: (note: Note, now: number) => Note) => {
+    await update(change(await currentNote(), Date.now()), true);
     router.back();
   };
 
@@ -159,41 +175,69 @@ function NoteEditor({ initial, isNew, store, onChanged }: NoteEditorProps) {
     router.back();
   };
 
+  const exportMarkdown = async () => {
+    try {
+      const current = await currentNote();
+      await shareMarkdown(current.title, noteToMarkdown(current.title, docOfContent(current)));
+    } catch (cause) {
+      setSaveError(`La note n'a pas pu être exportée : ${String(cause)}`);
+    }
+  };
+
   return (
     <ThemedView style={styles.container}>
-      <Stack.Screen options={{ title: inTrash ? 'Corbeille' : note.archived ? 'Archive' : '' }} />
+      <Stack.Screen
+        options={{
+          title: inTrash ? 'Corbeille' : note.archived ? 'Archive' : '',
+          headerRight:
+            markdownFilesSupported && !isBlank(note)
+              ? () => (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Exporter en Markdown"
+                    hitSlop={8}
+                    onPress={exportMarkdown}>
+                    <ThemedText style={{ color: theme.tint }}>Exporter</ThemedText>
+                  </Pressable>
+                )
+              : undefined,
+        }}
+      />
       <KeyboardAvoidingView
         style={styles.inner}
         // Android est bord à bord : sans `behavior`, la vue reste sous le clavier.
         behavior="padding"
         keyboardVerticalOffset={headerHeight}>
-        <ScrollView
-          contentContainerStyle={styles.content}
-          keyboardShouldPersistTaps="handled"
-          contentInsetAdjustmentBehavior="automatic">
+        <View style={styles.header}>
           <TextInput
             accessibilityLabel="Titre"
             placeholder="Titre"
             placeholderTextColor={theme.textSecondary}
             value={note.title}
             editable={!inTrash}
-            onChangeText={(title) => void update(withText(note, title, note.plainText, Date.now()))}
+            onChangeText={(title) => void update(withTitle(latest.current, title, Date.now()))}
             style={[styles.title, { color: theme.text }]}
           />
           {!inTrash && (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              style={styles.chipScroll}>
               <View style={styles.chips}>
                 <Chip
                   label="Sans catégorie"
                   selected={note.categoryId === null}
-                  onPress={() => void update(withCategory(note, null, Date.now()))}
+                  onPress={() => void update(withCategory(latest.current, null, Date.now()))}
                 />
                 {categories.map((category) => (
                   <Chip
                     key={category.id}
                     label={category.name}
                     selected={note.categoryId === category.id}
-                    onPress={() => void update(withCategory(note, category.id, Date.now()))}
+                    onPress={() =>
+                      void update(withCategory(latest.current, category.id, Date.now()))
+                    }
                   />
                 ))}
                 <Link href="/categories" asChild>
@@ -202,19 +246,14 @@ function NoteEditor({ initial, isNew, store, onChanged }: NoteEditorProps) {
               </View>
             </ScrollView>
           )}
-          <TextInput
-            accessibilityLabel="Contenu de la note"
-            placeholder="Écrivez ici…"
-            placeholderTextColor={theme.textSecondary}
-            value={note.plainText}
-            editable={!inTrash}
-            multiline
-            scrollEnabled={false}
-            textAlignVertical="top"
-            onChangeText={(text) => void update(withText(note, note.title, text, Date.now()))}
-            style={[styles.body, { color: theme.text }]}
-          />
-        </ScrollView>
+        </View>
+
+        <NoteBody
+          ref={bodyRef}
+          initial={initial}
+          editable={!inTrash}
+          onChange={(content) => void update(withBody(latest.current, content, Date.now()))}
+        />
 
         {saveError && (
           <ThemedText themeColor="danger" style={styles.error}>
@@ -229,10 +268,7 @@ function NoteEditor({ initial, isNew, store, onChanged }: NoteEditorProps) {
           {inTrash ? (
             <>
               <View style={styles.flex}>
-                <Button
-                  label="Restaurer"
-                  onPress={() => void leaveAfter(restored(note, Date.now()))}
-                />
+                <Button label="Restaurer" onPress={() => void leaveAfter(restored)} />
               </View>
               <View style={styles.flex}>
                 <Button label="Supprimer" variant="danger" onPress={deleteForever} />
@@ -244,7 +280,9 @@ function NoteEditor({ initial, isNew, store, onChanged }: NoteEditorProps) {
                 <Button
                   label={note.archived ? 'Désarchiver' : 'Archiver'}
                   disabled={isBlank(note)}
-                  onPress={() => void leaveAfter(withArchived(note, !note.archived, Date.now()))}
+                  onPress={() =>
+                    void leaveAfter((current, now) => withArchived(current, !current.archived, now))
+                  }
                 />
               </View>
               <View style={styles.flex}>
@@ -252,7 +290,7 @@ function NoteEditor({ initial, isNew, store, onChanged }: NoteEditorProps) {
                   label="Corbeille"
                   variant="danger"
                   disabled={isBlank(note)}
-                  onPress={() => void leaveAfter(trashed(note, Date.now()))}
+                  onPress={() => void leaveAfter(trashed)}
                 />
               </View>
             </>
@@ -267,12 +305,11 @@ const styles = StyleSheet.create({
   container: { flex: 1, alignItems: 'center' },
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: Spacing.four },
   inner: { flex: 1, width: '100%', maxWidth: MaxContentWidth },
-  content: { padding: Spacing.three, gap: Spacing.three, flexGrow: 1 },
+  header: { padding: Spacing.three, paddingBottom: Spacing.two, gap: Spacing.two },
   title: { fontSize: 24, fontWeight: 700, paddingVertical: Spacing.one },
-  // Sans cela, la rangée défilante se partage la hauteur libre avec le texte.
+  // Sans cela, la rangée défilante s'étire en hauteur.
   chipScroll: { flexGrow: 0 },
   chips: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
-  body: { fontSize: 16, lineHeight: 24, minHeight: 240, flexGrow: 1 },
   error: { paddingHorizontal: Spacing.three, paddingBottom: Spacing.two },
   actions: {
     flexDirection: 'row',

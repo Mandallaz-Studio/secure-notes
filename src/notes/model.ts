@@ -1,6 +1,6 @@
 import sodium from 'react-native-libsodium';
 
-import type { Category, Note, NoteFilter, NoteSummary } from '@/notes/types';
+import type { BodyContent, Category, Note, NoteFilter, NoteSummary } from '@/notes/types';
 
 export const PREVIEW_LENGTH = 140;
 
@@ -75,6 +75,15 @@ export function isBlank(note: Pick<Note, 'title' | 'plainText'>): boolean {
 
 export function withText(note: Note, title: string, text: string, now: number): Note {
   return { ...note, title, body: text, bodyFormat: 'text', plainText: text, updatedAt: now };
+}
+
+export function withTitle(note: Note, title: string, now: number): Note {
+  return { ...note, title, updatedAt: now };
+}
+
+/** Remplace le contenu de la note, dans le format fourni par l'éditeur. */
+export function withBody(note: Note, content: BodyContent, now: number): Note {
+  return { ...note, ...content, updatedAt: now };
 }
 
 export function withCategory(note: Note, categoryId: string | null, now: number): Note {

@@ -1,5 +1,6 @@
 import { createContext, use, useEffect, useState, type ReactNode } from 'react';
 
+import { setPendingNoteSink } from '@/notes/pending-notes';
 import { acquireNoteStore, releaseNoteStore } from '@/notes/store-manager';
 import type { Category, NoteFilter, NoteStore, NoteSummary } from '@/notes/types';
 import { useVault } from '@/vault/vault-context';
@@ -27,16 +28,22 @@ export function NotesProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!keys) return;
     let cancelled = false;
-    acquireNoteStore(keys).then(
-      (opened) => {
+    acquireNoteStore(keys)
+      .then(async (opened) => {
+        if (cancelled) return;
+        // Enregistre aussi les notes importées pendant que le coffre se verrouillait.
+        await setPendingNoteSink(async (note) => {
+          await opened.saveNote(note);
+          setRevision((value) => value + 1);
+        });
         if (!cancelled) setStore(opened);
-      },
-      (cause) => {
+      })
+      .catch((cause) => {
         if (!cancelled) setError(`La base de notes n'a pas pu être ouverte : ${String(cause)}`);
-      },
-    );
+      });
     return () => {
       cancelled = true;
+      void setPendingNoteSink(null);
       setStore(null);
       setError(null);
       void releaseNoteStore();
