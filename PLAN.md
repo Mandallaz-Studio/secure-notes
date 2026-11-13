@@ -1,7 +1,7 @@
 # Secure Notes — plan de développement
 
 > Document de reprise pour les prochaines sessions. Dernière mise à jour : 2026-11-13.
-> État : **plan validé, aucun code écrit**. Prochaine étape : phase 0.
+> État : **phase 0 terminée**. Prochaine étape : phase 1.
 
 ## 1. Objectif
 
@@ -144,7 +144,7 @@ Chaque phase tient en principe en une session et se termine par un résultat vé
 
 ### Suivi
 
-- [ ] Phase 0 — Fondations
+- [x] Phase 0 — Fondations (voir « Bilan de la phase 0 »)
 - [ ] Phase 1 — Crypto et création du coffre
 - [ ] Phase 2 — Notes locales
 - [ ] Phase 3 — Éditeur
@@ -152,6 +152,51 @@ Chaque phase tient en principe en une session et se termine par un résultat vé
 - [ ] Phase 5 — Pièces jointes et images
 - [ ] Phase 6 — Partage par lien
 - [ ] Phase 7 — Export, recréation de compte, finitions
+
+### Bilan de la phase 0 (terminée le 2026-11-13, sur Android et web)
+
+Fait et vérifié :
+- Projet Expo SDK 58 (React Native 0.88, TypeScript, expo-router), écrans Notes,
+  Réglages, `dev/crypto`, `dev/editor`.
+- Thème clair / sombre / système, persistant ; palette de couleurs de notes par jetons.
+- `src/crypto/aead.ts` : XChaCha20-Poly1305 + dérivation de sous-clés ; 9 tests Jest.
+- `npm run typecheck`, `npm run lint`, `npm test` passent.
+- **libsodium natif fonctionne sur Android** (émulateur `Pixel_10`, nouvelle
+  architecture) : aller-retour, rejet d'une mauvaise clé, 1 Mo en 7 ms.
+- **Compatibilité entre plateformes** : Android, web et Node dérivent la même sous-clé
+  et déchiffrent le même message de référence (`src/crypto/vectors.ts`).
+- **TenTap fonctionne sur Android** : titres, gras, italique, souligné, barré, listes,
+  couleur de texte, surlignage, export JSON, thèmes clair et sombre.
+
+Non vérifié :
+- iOS n'a pas été compilé (pas de Mac).
+- La barre d'outils TenTap au-dessus du clavier n'a pas été vue (clavier logiciel
+  masqué sur l'émulateur).
+
+Constats à retenir :
+- La version native de `react-native-libsodium` n'accepte les données associées de
+  l'AEAD que sous forme de **texte** (ni octets ni `null`) : l'API de `aead.ts` prend
+  donc une chaîne. Elle n'expose **pas** non plus `secretstream` : en phase 5, les
+  fichiers seront découpés en blocs chiffrés un par un (numéro de bloc dans les
+  données associées).
+- Sur le web, la dérivation de clés exige la variante « sumo » de libsodium
+  (`loadSumoVersion()`, déjà appelé dans `aead.ts`).
+- Dans la WebView de l'éditeur, les couleurs du thème se posent sur `body` : une
+  règle CSS `*` écrase les couleurs de texte. Les couleurs sont pour l'instant
+  stockées en hexadécimal par TenTap ; le passage aux jetons de palette est à faire
+  en phase 3.
+- Le type `theme` de TenTap dépasse la profondeur admise par TypeScript (contourné par
+  un `as never` commenté dans `editor-spike.tsx`).
+- `expo-doctor` signale `react-native-libsodium` comme « non testé sur la nouvelle
+  architecture » : l'essai sur émulateur montre qu'il y fonctionne.
+- npm 12 bloque les scripts d'installation : celui de `react-native-libsodium` est
+  autorisé dans `package.json` (`allowScripts`).
+- Identifiant d'app (Android et iOS) : `com.mandallazstudio.securenotes`.
+- SQLCipher est déjà activé dans `app.json` pour éviter un nouveau build en phase 2.
+- Sous Jest, `react-native-libsodium` est remplacé par `libsodium-wrappers-sumo`.
+- Build Android local : `JAVA_HOME=~/android-studio/jbr ANDROID_HOME=~/Android/Sdk npx expo run:android`.
+  Au premier lancement, le client de développement demande l'accès aux appareils à
+  proximité (recherche du serveur de dev).
 
 ## 5. Points d'attention
 
