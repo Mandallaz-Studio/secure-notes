@@ -3,7 +3,7 @@ import { Appearance, Platform } from 'react-native';
 
 import type { ColorScheme } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { loadStoredTheme, storeTheme } from '@/theme/theme-storage';
+import { getPref, setPref } from '@/storage/prefs';
 
 export type ThemePreference = 'system' | 'light' | 'dark';
 
@@ -15,6 +15,8 @@ type ThemeContextValue = {
   setPreference: (preference: ThemePreference) => void;
 };
 
+const PREF_THEME = 'theme-preference';
+
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 function parsePreference(value: string | null): ThemePreference {
@@ -23,7 +25,7 @@ function parsePreference(value: string | null): ThemePreference {
 
 export function ThemePreferenceProvider({ children }: { children: ReactNode }) {
   const [preference, setPreferenceState] = useState<ThemePreference>(() =>
-    parsePreference(loadStoredTheme()),
+    parsePreference(getPref(PREF_THEME)),
   );
   const systemScheme = useColorScheme();
 
@@ -40,7 +42,7 @@ export function ThemePreferenceProvider({ children }: { children: ReactNode }) {
 
   const setPreference = (next: ThemePreference) => {
     setPreferenceState(next);
-    storeTheme(next);
+    setPref(PREF_THEME, next);
   };
 
   return <ThemeContext value={{ preference, scheme, setPreference }}>{children}</ThemeContext>;

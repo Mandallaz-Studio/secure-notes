@@ -1,0 +1,11 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`dérivation des clés garde un format stable d’une version à l’autre 1`] = `
+{
+  "accountId": "c006b1141e9e7c7c4350ed7b3cf444c2",
+  "authSecret": "7cQBINcX6cVHjf_qx4lGsmJbDnDJQZasEjQI4Up1hh8",
+  "databaseKey": "e5a3892d5efd1250971c9061882e02e8e115892598a51c8252e1a6999f3659ea",
+  "master": "0ff0d0ae78763f07e53e70528a02e7620de1944133b2a36eeca94d00809a6ed6",
+  "wrapKey": "a91032036b742328760a655d36ae968d5e4c813cea0abf5a92a79c7dc243fbcb",
+}
+`;

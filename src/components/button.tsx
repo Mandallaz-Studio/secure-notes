@@ -6,27 +6,28 @@ import { useTheme } from '@/hooks/use-theme';
 
 type ButtonProps = Omit<PressableProps, 'children' | 'style'> & {
   label: string;
+  variant?: 'default' | 'primary' | 'danger';
+  /** Affiche le bouton comme l'option retenue d'un groupe. */
   selected?: boolean;
 };
 
-export function Button({ label, selected, ...rest }: ButtonProps) {
+export function Button({ label, variant = 'default', selected, disabled, ...rest }: ButtonProps) {
   const theme = useTheme();
+  const filled = selected || variant === 'primary';
+  const backgroundColor = filled ? theme.tint : theme.backgroundElement;
+  const color = filled ? theme.background : variant === 'danger' ? theme.danger : theme.text;
 
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityState={{ selected }}
+      accessibilityState={{ selected, disabled: !!disabled }}
+      disabled={disabled}
       {...rest}
       style={({ pressed }) => [
         styles.button,
-        {
-          backgroundColor: selected ? theme.tint : theme.backgroundElement,
-          opacity: pressed ? 0.7 : 1,
-        },
+        { backgroundColor, opacity: disabled ? 0.4 : pressed ? 0.7 : 1 },
       ]}>
-      <ThemedText style={selected ? { color: theme.background, fontWeight: 600 } : undefined}>
-        {label}
-      </ThemedText>
+      <ThemedText style={{ color, fontWeight: filled ? 600 : 400 }}>{label}</ThemedText>
     </Pressable>
   );
 }

@@ -1,7 +1,7 @@
 # Secure Notes — plan de développement
 
 > Document de reprise pour les prochaines sessions. Dernière mise à jour : 2026-11-13.
-> État : **phase 0 terminée**. Prochaine étape : phase 1.
+> État : **phases 0 et 1 terminées**. Prochaine étape : phase 2.
 
 ## 1. Objectif
 
@@ -145,7 +145,7 @@ Chaque phase tient en principe en une session et se termine par un résultat vé
 ### Suivi
 
 - [x] Phase 0 — Fondations (voir « Bilan de la phase 0 »)
-- [ ] Phase 1 — Crypto et création du coffre
+- [x] Phase 1 — Crypto et création du coffre (voir « Bilan de la phase 1 »)
 - [ ] Phase 2 — Notes locales
 - [ ] Phase 3 — Éditeur
 - [ ] Phase 4 — Synchro Supabase
@@ -197,6 +197,61 @@ Constats à retenir :
 - Build Android local : `JAVA_HOME=~/android-studio/jbr ANDROID_HOME=~/Android/Sdk npx expo run:android`.
   Au premier lancement, le client de développement demande l'accès aux appareils à
   proximité (recherche du serveur de dev).
+
+### Bilan de la phase 1 (terminée le 2026-11-13, sur Android et web)
+
+Fait et vérifié sur l'émulateur Android :
+- Création d'un coffre : 24 mots affichés une fois, vérification de 3 mots tirés au
+  hasard, puis ouverture de l'app. La phrase n'est stockée nulle part.
+- Persistance : après redémarrage de l'app, le coffre s'ouvre sans ressaisie.
+- Suppression du coffre de l'appareil, puis restauration avec la phrase (tapée sans
+  accents, avec majuscules) : on retrouve le même identifiant de compte.
+- Captures et enregistrements d'écran bloqués sur l'affichage, la vérification et la
+  saisie de la phrase (la capture sort noire).
+- Copie de la phrase dans le presse-papiers, effacée après 60 secondes.
+- Verrouillage biométrique (empreinte posée à la main sur l'émulateur) : activation,
+  verrouillage manuel, refus après annulation, déverrouillage, et démarrage
+  verrouillé après redémarrage de l'app.
+- Messages d'erreur de restauration : nombre de mots, mots inconnus avec leur
+  position, phrase incorrecte.
+- 28 tests Jest (phrase, dérivation des clés, presse-papiers) ; types et lint passent.
+
+Non vérifié :
+- Verrouillage automatique après 30 s en arrière-plan (codé, non testé).
+- iOS (pas de Mac), y compris l'expiration du presse-papiers gérée par le système.
+- L'effacement du presse-papiers sur appareil n'est vérifié qu'indirectement (plus
+  rien à coller après le délai) ; la logique est couverte par les tests Jest.
+
+Décisions prises pendant la phase :
+- **Liste de mots BIP39 française** (`@scure/bip39`). Elle n'a aucun doublon une fois
+  les accents retirés : la saisie tolère accents manquants et majuscules.
+- **Clé maîtresse = dérivation à sens unique de l'entropie** (`src/crypto/keys.ts`) :
+  la clé stockée ne permet pas de retrouver la phrase. Sous-clés : identifiant de
+  compte, secret d'authentification, clé d'enveloppe, clé de la base locale. Un test
+  fige ces valeurs ; les contextes de dérivation ne doivent plus changer.
+- **Biométrie liée au Keystore/Keychain** (`requireAuthentication` d'`expo-secure-store`)
+  plutôt qu'un simple écran de verrouillage. Contrepartie : si les empreintes du
+  téléphone changent, la clé est invalidée et il faut restaurer avec la phrase.
+- Un marqueur non secret (identifiant de compte) dans les préférences indique qu'un
+  coffre existe, sans déclencher de demande d'empreinte au démarrage.
+- **Web** : la clé maîtresse ne vit qu'en mémoire et disparaît au rechargement.
+- Presse-papiers (`src/security/secret-clipboard.ts`) : contenu marqué sensible sur
+  Android, expiration système et copie locale uniquement sur iOS ; l'app n'efface que
+  si le presse-papiers contient encore la phrase. Une phrase collée pour restaurer
+  est effacée du presse-papiers aussitôt.
+
+Constats à retenir :
+- Sur Android, `autoCorrect={false}` ne suffit pas pour un champ multiligne : le
+  clavier corrigeait « substrat » en « substrate ». Les champs de saisie de la phrase
+  utilisent `keyboardType="visible-password"` (`src/components/text-field.tsx`).
+- Les services d'accessibilité lisent toujours les mots affichés (c'est ainsi que les
+  tests automatisés les ont relevés) : le blocage des captures ne couvre pas ce cas.
+- Routes protégées par `Stack.Protected` selon l'état du coffre (`src/app/_layout.tsx`).
+- Sur l'émulateur, `adb emu finger touch 1` est accepté mais n'est pas reconnu par la
+  demande d'empreinte : il faut poser le doigt depuis les contrôles de l'émulateur.
+- `@scure/bip39` est en ESM : Jest doit le transformer (`transformIgnorePatterns`).
+- Le coffre laissé sur l'émulateur est un coffre d'essai dont la phrase figure dans
+  les journaux de la session : à supprimer avant tout usage réel.
 
 ## 5. Points d'attention
 
