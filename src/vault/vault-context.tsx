@@ -3,6 +3,7 @@ import { AppState } from 'react-native';
 
 import { cryptoReady } from '@/crypto/aead';
 import { deriveVaultKeys, masterKeyFromEntropy, type VaultKeys } from '@/crypto/keys';
+import { destroyNoteStore } from '@/notes/store-manager';
 import { getPref, removePref, setPref } from '@/storage/prefs';
 import {
   canUseBiometrics,
@@ -35,7 +36,7 @@ type VaultContextValue = {
   unlock: () => Promise<boolean>;
   lock: () => void;
   setBiometricEnabled: (enabled: boolean) => Promise<void>;
-  /** Efface la clé de cet appareil. Sans la phrase, les données sont perdues. */
+  /** Efface la clé et les notes de cet appareil. Sans la phrase, elles sont perdues. */
   destroy: () => Promise<void>;
 };
 
@@ -161,6 +162,10 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   };
 
   const destroy = async () => {
+    // Les notes d'abord : sans la clé, la base resterait sur l'appareil, illisible.
+    if (accountId) {
+      await destroyNoteStore(accountId);
+    }
     await deleteMasterKey();
     removePref(PREF_ACCOUNT);
     removePref(PREF_BIOMETRIC);

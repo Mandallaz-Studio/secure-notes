@@ -8,7 +8,7 @@ import { Spacing } from '@/constants/theme';
 
 export default function WelcomeScreen() {
   return (
-    <Screen>
+    <Screen withoutHeader>
       <View style={styles.block}>
         <ThemedText type="title">Secure Notes</ThemedText>
         <ThemedText themeColor="textSecondary">

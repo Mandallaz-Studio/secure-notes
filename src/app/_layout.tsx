@@ -2,6 +2,7 @@ import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 
 import { Colors } from '@/constants/theme';
+import { NotesProvider } from '@/notes/notes-context';
 import { ThemePreferenceProvider, useThemePreference } from '@/theme/theme-preference';
 import { useVault, VaultProvider } from '@/vault/vault-context';
 
@@ -9,7 +10,9 @@ export default function RootLayout() {
   return (
     <ThemePreferenceProvider>
       <VaultProvider>
-        <Navigation />
+        <NotesProvider>
+          <Navigation />
+        </NotesProvider>
       </VaultProvider>
     </ThemePreferenceProvider>
   );
@@ -42,6 +45,8 @@ function Navigation() {
           {/* Les écrans de l'app n'existent que coffre déverrouillé. */}
           <Stack.Protected guard={status === 'unlocked'}>
             <Stack.Screen name="index" options={{ title: 'Notes' }} />
+            <Stack.Screen name="note/[id]" options={{ title: '' }} />
+            <Stack.Screen name="categories" options={{ title: 'Catégories' }} />
             <Stack.Screen name="settings" options={{ title: 'Réglages' }} />
             <Stack.Screen name="dev/crypto" options={{ title: 'Essai chiffrement' }} />
             <Stack.Screen name="dev/editor" options={{ title: 'Essai éditeur' }} />

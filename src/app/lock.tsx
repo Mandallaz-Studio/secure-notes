@@ -36,7 +36,7 @@ export default function LockScreen() {
   };
 
   return (
-    <Screen>
+    <Screen withoutHeader>
       <View style={styles.block}>
         <ThemedText type="title">Coffre verrouillé</ThemedText>
         <ThemedText themeColor="textSecondary">

@@ -1,7 +1,7 @@
 # Secure Notes — plan de développement
 
 > Document de reprise pour les prochaines sessions. Dernière mise à jour : 2026-11-13.
-> État : **phases 0 et 1 terminées**. Prochaine étape : phase 2.
+> État : **phases 0, 1 et 2 terminées**. Prochaine étape : phase 3 (éditeur).
 
 ## 1. Objectif
 
@@ -146,7 +146,7 @@ Chaque phase tient en principe en une session et se termine par un résultat vé
 
 - [x] Phase 0 — Fondations (voir « Bilan de la phase 0 »)
 - [x] Phase 1 — Crypto et création du coffre (voir « Bilan de la phase 1 »)
-- [ ] Phase 2 — Notes locales
+- [x] Phase 2 — Notes locales
 - [ ] Phase 3 — Éditeur
 - [ ] Phase 4 — Synchro Supabase
 - [ ] Phase 5 — Pièces jointes et images
@@ -252,6 +252,59 @@ Constats à retenir :
 - `@scure/bip39` est en ESM : Jest doit le transformer (`transformIgnorePatterns`).
 - Le coffre laissé sur l'émulateur est un coffre d'essai dont la phrase figure dans
   les journaux de la session : à supprimer avant tout usage réel.
+
+### Bilan de la phase 2 (terminée le 2026-11-13, sur Android et web)
+
+Fait :
+- `src/notes/` : types, modèle (fonctions pures), stockage mémoire, stockage SQLite
+  chiffré SQLCipher (`sqlite-store.ts`, une base par compte, clé = `databaseKey`),
+  gestionnaire d'ouverture/fermeture (`store-manager.ts`), contexte React.
+- Écrans : liste (`src/app/index.tsx` : vues Notes / Archives / Corbeille, recherche,
+  filtres par catégorie), note (`src/app/note/[id].tsx` : texte brut, enregistrement
+  automatique, catégorie, archive, corbeille, restauration, suppression définitive),
+  catégories (`src/app/categories.tsx`).
+- Supprimer le coffre efface aussi la base de notes de l'appareil.
+- 46 tests Jest ; types et lint passent.
+
+Vérifié sur l'émulateur Android (stockage SQLite chiffré) et dans le navigateur
+(stockage mémoire) : création, aperçu dans la liste, recherche, rangement dans une
+catégorie, archivage et désarchivage, corbeille, restauration, suppression
+définitive (annulation comprise), vidage de la corbeille, ajout de catégorie avec
+refus des doublons, renommage, suppression (les notes restent, sans catégorie).
+
+Vérifié sur l'émulateur seulement :
+- Les notes survivent au redémarrage de l'app.
+- Le fichier de base est illisible sans la clé : pas d'en-tête SQLite, aucun texte
+  de note ni de catégorie en clair, `sqlite3` refuse de l'ouvrir.
+
+Non vérifié :
+- iOS (pas de Mac).
+- La recherche avec accents sur l'émulateur (`adb` ne saisit pas les accents) ; elle
+  est couverte par Jest et vérifiée dans le navigateur.
+- Que supprimer le coffre efface bien le fichier de base sur l'appareil.
+- Le verrouillage automatique après 30 secondes en arrière-plan (phase 1) : le
+  coffre s'est bien verrouillé après une sortie de l'app, mais sans mesure du délai.
+
+Constats à retenir :
+- Android est bord à bord : la fenêtre ne se redimensionne pas pour le clavier.
+  `KeyboardAvoidingView` doit avoir `behavior="padding"` sur les deux plateformes,
+  avec `useHeaderHeight()` (de `expo-router/react-navigation`) comme décalage.
+- Un `ScrollView` horizontal placé dans une colonne s'étire en hauteur : lui donner
+  `flexGrow: 0`.
+- `<Link asChild>` autour d'un `Pressable` dont le style est une fonction fait
+  perdre ce style sur Android : utiliser `router.push` dans `onPress`.
+- Les écrans sans en-tête passent sous la barre d'état : `Screen` a une option
+  `withoutHeader` (écrans d'accueil et de verrouillage).
+- Sur le web, `Button` et `Chip` reçoivent leur libellé comme nom accessible.
+- Tests sur émulateur avec `adb` : la touche Retour sur la liste quitte l'app et
+  verrouille le coffre ; l'invite d'empreinte doit être validée par l'utilisateur.
+
+Choix faits :
+- Les colonnes sont en clair à l'intérieur de la base chiffrée (recherche locale
+  possible) ; le chiffrement note par note n'interviendra qu'à la synchro (phase 4).
+- Une catégorie par note. Une note vide n'est pas conservée.
+- Recherche insensible à la casse et aux accents via une colonne `search_text`.
+- Sur le web, les notes ne vivent qu'en mémoire.
 
 ## 5. Points d'attention
 
