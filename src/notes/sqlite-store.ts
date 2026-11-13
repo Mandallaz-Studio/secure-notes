@@ -9,6 +9,8 @@ import type {
   NoteFilter,
   NoteStore,
   NoteSummary,
+  RemoteChange,
+  SyncEntry,
 } from '@/notes/types';
 
 /**
@@ -42,6 +44,19 @@ const MIGRATIONS: string[] = [
      created_at INTEGER NOT NULL,
      updated_at INTEGER NOT NULL
    );`,
+  // Version 2 : état de synchronisation. Tout ce qui existe déjà est « à envoyer ».
+  `ALTER TABLE notes ADD COLUMN dirty INTEGER NOT NULL DEFAULT 1;
+   ALTER TABLE notes ADD COLUMN server_seq INTEGER;
+   ALTER TABLE categories ADD COLUMN dirty INTEGER NOT NULL DEFAULT 1;
+   ALTER TABLE categories ADD COLUMN server_seq INTEGER;
+   CREATE TABLE tombstones (
+     id TEXT PRIMARY KEY NOT NULL,
+     server_seq INTEGER NOT NULL
+   );
+   CREATE TABLE sync_state (
+     key TEXT PRIMARY KEY NOT NULL,
+     value TEXT NOT NULL
+   );`,
 ];
 
 type NoteRow = {
@@ -63,6 +78,55 @@ type SummaryRow = Pick<
 > & { preview: string };
 
 type CategoryRow = { id: string; name: string; created_at: number; updated_at: number };
+
+type SyncColumns = { dirty: number; server_seq: number | null };
+
+const NOTE_COLUMNS = `id, title, body, body_format, plain_text, category_id, archived,
+                      created_at, updated_at, deleted_at`;
+const CATEGORY_COLUMNS = 'id, name, created_at, updated_at';
+
+function noteOfRow(row: NoteRow): Note {
+  return {
+    id: row.id,
+    title: row.title,
+    body: row.body,
+    bodyFormat: row.body_format as BodyFormat,
+    plainText: row.plain_text,
+    categoryId: row.category_id,
+    archived: row.archived === 1,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    deletedAt: row.deleted_at,
+  };
+}
+
+function categoryOfRow(row: CategoryRow): Category {
+  return { id: row.id, name: row.name, createdAt: row.created_at, updatedAt: row.updated_at };
+}
+
+function noteEntry(row: NoteRow & SyncColumns): SyncEntry {
+  return {
+    kind: 'note',
+    id: row.id,
+    note: noteOfRow(row),
+    dirty: row.dirty === 1,
+    serverSeq: row.server_seq,
+  };
+}
+
+function categoryEntry(row: CategoryRow & SyncColumns): SyncEntry {
+  return {
+    kind: 'category',
+    id: row.id,
+    category: categoryOfRow(row),
+    dirty: row.dirty === 1,
+    serverSeq: row.server_seq,
+  };
+}
+
+function tombstoneEntry(row: { id: string; server_seq: number }): SyncEntry {
+  return { kind: 'tombstone', id: row.id, dirty: true, serverSeq: row.server_seq };
+}
 
 export function databaseName(accountId: string): string {
   return `notes-${accountId}.db`;
@@ -142,36 +206,32 @@ export class SqliteNoteStore implements NoteStore {
 
   async getNote(id: string): Promise<Note | null> {
     const row = await this.db.getFirstAsync<NoteRow>(
-      `SELECT id, title, body, body_format, plain_text, category_id, archived,
-              created_at, updated_at, deleted_at
-         FROM notes WHERE id = ?`,
+      `SELECT ${NOTE_COLUMNS} FROM notes WHERE id = ?`,
       [id],
     );
-    if (!row) return null;
-    return {
-      id: row.id,
-      title: row.title,
-      body: row.body,
-      bodyFormat: row.body_format as BodyFormat,
-      plainText: row.plain_text,
-      categoryId: row.category_id,
-      archived: row.archived === 1,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      deletedAt: row.deleted_at,
-    };
+    return row ? noteOfRow(row) : null;
   }
 
-  async saveNote(note: Note): Promise<void> {
+  /**
+   * @param remoteSeq Absent : écriture locale, la note devient « à envoyer » et
+   *   garde sa version du serveur (y compris si elle renaît après suppression).
+   *   Présent : version reçue du serveur.
+   */
+  private async writeNote(note: Note, remoteSeq?: number): Promise<void> {
+    const local = remoteSeq === undefined;
     await this.db.runAsync(
       `INSERT INTO notes (id, title, body, body_format, plain_text, search_text,
-                          category_id, archived, created_at, updated_at, deleted_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                          category_id, archived, created_at, updated_at, deleted_at,
+                          dirty, server_seq)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+               ${local ? '(SELECT server_seq FROM tombstones WHERE id = ?)' : '?'})
        ON CONFLICT (id) DO UPDATE SET
          title = excluded.title, body = excluded.body, body_format = excluded.body_format,
          plain_text = excluded.plain_text, search_text = excluded.search_text,
          category_id = excluded.category_id, archived = excluded.archived,
-         updated_at = excluded.updated_at, deleted_at = excluded.deleted_at`,
+         created_at = excluded.created_at, updated_at = excluded.updated_at,
+         deleted_at = excluded.deleted_at, dirty = excluded.dirty
+         ${local ? '' : ', server_seq = excluded.server_seq'}`,
       [
         note.id,
         note.title,
@@ -184,48 +244,181 @@ export class SqliteNoteStore implements NoteStore {
         note.createdAt,
         note.updatedAt,
         note.deletedAt,
+        local ? 1 : 0,
+        local ? note.id : remoteSeq,
       ],
     );
+    await this.db.runAsync('DELETE FROM tombstones WHERE id = ?', [note.id]);
+  }
+
+  private async writeCategory(category: Category, remoteSeq?: number): Promise<void> {
+    const local = remoteSeq === undefined;
+    await this.db.runAsync(
+      `INSERT INTO categories (id, name, created_at, updated_at, dirty, server_seq)
+       VALUES (?, ?, ?, ?, ?, ${local ? '(SELECT server_seq FROM tombstones WHERE id = ?)' : '?'})
+       ON CONFLICT (id) DO UPDATE SET
+         name = excluded.name, created_at = excluded.created_at,
+         updated_at = excluded.updated_at, dirty = excluded.dirty
+         ${local ? '' : ', server_seq = excluded.server_seq'}`,
+      [
+        category.id,
+        category.name,
+        category.createdAt,
+        category.updatedAt,
+        local ? 1 : 0,
+        local ? category.id : remoteSeq,
+      ],
+    );
+    await this.db.runAsync('DELETE FROM tombstones WHERE id = ?', [category.id]);
+  }
+
+  async saveNote(note: Note): Promise<void> {
+    await this.writeNote(note);
+  }
+
+  /** Supprime des lignes en gardant une trace de celles que le serveur connaît. */
+  private async bury(table: 'notes' | 'categories', where: string, params: string[]) {
+    await this.db.withTransactionAsync(async () => {
+      await this.db.runAsync(
+        `INSERT OR REPLACE INTO tombstones (id, server_seq)
+         SELECT id, server_seq FROM ${table} WHERE ${where} AND server_seq IS NOT NULL`,
+        params,
+      );
+      await this.db.runAsync(`DELETE FROM ${table} WHERE ${where}`, params);
+    });
   }
 
   async deleteNote(id: string): Promise<void> {
-    await this.db.runAsync('DELETE FROM notes WHERE id = ?', [id]);
+    await this.bury('notes', 'id = ?', [id]);
   }
 
   async emptyTrash(): Promise<void> {
-    await this.db.runAsync('DELETE FROM notes WHERE deleted_at IS NOT NULL');
+    await this.bury('notes', 'deleted_at IS NOT NULL', []);
   }
 
   async listCategories(): Promise<Category[]> {
     const rows = await this.db.getAllAsync<CategoryRow>(
-      'SELECT id, name, created_at, updated_at FROM categories',
+      `SELECT ${CATEGORY_COLUMNS} FROM categories`,
     );
     return rows
-      .map((row) => ({
-        id: row.id,
-        name: row.name,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-      }))
+      .map(categoryOfRow)
       .sort((a, b) => foldText(a.name).localeCompare(foldText(b.name)));
   }
 
   async saveCategory(category: Category): Promise<void> {
-    await this.db.runAsync(
-      `INSERT INTO categories (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)
-       ON CONFLICT (id) DO UPDATE SET name = excluded.name, updated_at = excluded.updated_at`,
-      [category.id, category.name, category.createdAt, category.updatedAt],
-    );
+    await this.writeCategory(category);
   }
 
   async deleteCategory(id: string, now: number): Promise<void> {
-    await this.db.withTransactionAsync(async () => {
-      await this.db.runAsync(
-        'UPDATE notes SET category_id = NULL, updated_at = ? WHERE category_id = ?',
-        [now, id],
-      );
-      await this.db.runAsync('DELETE FROM categories WHERE id = ?', [id]);
-    });
+    await this.db.runAsync(
+      'UPDATE notes SET category_id = NULL, updated_at = ?, dirty = 1 WHERE category_id = ?',
+      [now, id],
+    );
+    await this.bury('categories', 'id = ?', [id]);
+  }
+
+  async listPending(): Promise<SyncEntry[]> {
+    const categories = await this.db.getAllAsync<CategoryRow & SyncColumns>(
+      `SELECT ${CATEGORY_COLUMNS}, dirty, server_seq FROM categories WHERE dirty = 1`,
+    );
+    const notes = await this.db.getAllAsync<NoteRow & SyncColumns>(
+      `SELECT ${NOTE_COLUMNS}, dirty, server_seq FROM notes WHERE dirty = 1`,
+    );
+    const tombstones = await this.db.getAllAsync<{ id: string; server_seq: number }>(
+      'SELECT id, server_seq FROM tombstones',
+    );
+    return [
+      ...categories.map(categoryEntry),
+      ...notes.map(noteEntry),
+      ...tombstones.map(tombstoneEntry),
+    ];
+  }
+
+  async getSyncEntry(id: string): Promise<SyncEntry | null> {
+    const tombstone = await this.db.getFirstAsync<{ id: string; server_seq: number }>(
+      'SELECT id, server_seq FROM tombstones WHERE id = ?',
+      [id],
+    );
+    if (tombstone) return tombstoneEntry(tombstone);
+    const note = await this.db.getFirstAsync<NoteRow & SyncColumns>(
+      `SELECT ${NOTE_COLUMNS}, dirty, server_seq FROM notes WHERE id = ?`,
+      [id],
+    );
+    if (note) return noteEntry(note);
+    const category = await this.db.getFirstAsync<CategoryRow & SyncColumns>(
+      `SELECT ${CATEGORY_COLUMNS}, dirty, server_seq FROM categories WHERE id = ?`,
+      [id],
+    );
+    return category ? categoryEntry(category) : null;
+  }
+
+  async applyRemote(change: RemoteChange, seq: number): Promise<void> {
+    if (change.kind === 'note') {
+      await this.writeNote(change.note, seq);
+    } else if (change.kind === 'category') {
+      await this.writeCategory(change.category, seq);
+    } else {
+      await this.db.runAsync('DELETE FROM notes WHERE id = ?', [change.id]);
+      await this.db.runAsync('DELETE FROM categories WHERE id = ?', [change.id]);
+      await this.db.runAsync('DELETE FROM tombstones WHERE id = ?', [change.id]);
+    }
+  }
+
+  async setServerSeq(id: string, seq: number): Promise<void> {
+    for (const table of ['notes', 'categories', 'tombstones']) {
+      await this.db.runAsync(`UPDATE ${table} SET server_seq = ? WHERE id = ?`, [seq, id]);
+    }
+  }
+
+  async markPushed(entry: SyncEntry, seq: number): Promise<void> {
+    if (entry.kind === 'tombstone') {
+      await this.db.runAsync('DELETE FROM tombstones WHERE id = ? AND server_seq = ?', [
+        entry.id,
+        entry.serverSeq,
+      ]);
+      return;
+    }
+    const [table, updatedAt] =
+      entry.kind === 'note'
+        ? ['notes', entry.note.updatedAt]
+        : ['categories', entry.category.updatedAt];
+    const result = await this.db.runAsync(
+      `UPDATE ${table}
+          SET server_seq = ?, dirty = CASE WHEN updated_at = ? THEN 0 ELSE 1 END
+        WHERE id = ?`,
+      [seq, updatedAt, entry.id],
+    );
+    if (result.changes === 0) {
+      // Supprimé pendant l'envoi : le serveur doit encore l'apprendre.
+      await this.db.runAsync('INSERT OR REPLACE INTO tombstones (id, server_seq) VALUES (?, ?)', [
+        entry.id,
+        seq,
+      ]);
+    }
+  }
+
+  async getSyncValue(key: string): Promise<string | null> {
+    const row = await this.db.getFirstAsync<{ value: string }>(
+      'SELECT value FROM sync_state WHERE key = ?',
+      [key],
+    );
+    return row?.value ?? null;
+  }
+
+  async setSyncValue(key: string, value: string): Promise<void> {
+    await this.db.runAsync('INSERT OR REPLACE INTO sync_state (key, value) VALUES (?, ?)', [
+      key,
+      value,
+    ]);
+  }
+
+  async resetSync(): Promise<void> {
+    await this.db.execAsync(
+      `UPDATE notes SET dirty = 1, server_seq = NULL;
+       UPDATE categories SET dirty = 1, server_seq = NULL;
+       DELETE FROM tombstones;
+       DELETE FROM sync_state;`,
+    );
   }
 
   async close(): Promise<void> {

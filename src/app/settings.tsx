@@ -4,6 +4,7 @@ import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { Button } from '@/components/button';
 import { confirmDestructive } from '@/components/confirm';
+import { TextField } from '@/components/text-field';
 import { ThemedText } from '@/components/themed-text';
 import { NotePalette, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
@@ -13,6 +14,7 @@ import { createNote, withBody, withTitle } from '@/notes/model';
 import { useNotes } from '@/notes/notes-context';
 import { submitNote } from '@/notes/pending-notes';
 import { contentOfDoc } from '@/notes/rich-text';
+import { useSync } from '@/sync/sync-context';
 import { useThemePreference, type ThemePreference } from '@/theme/theme-preference';
 import { useVault } from '@/vault/vault-context';
 
@@ -48,6 +50,8 @@ export default function SettingsScreen() {
       </View>
 
       {markdownFilesSupported && <ImportSection />}
+
+      <SyncSection />
 
       <VaultSection />
 
@@ -190,6 +194,108 @@ function ImportSection() {
           {error}
         </ThemedText>
       )}
+    </View>
+  );
+}
+
+function SyncSection() {
+  const { config, status, enable, disable, syncNow } = useSync();
+  const [url, setUrl] = useState(config.url);
+  const [anonKey, setAnonKey] = useState(config.anonKey);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const activate = async () => {
+    setError(null);
+    setBusy(true);
+    try {
+      await enable(url, anonKey);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deactivate = async () => {
+    const confirmed = await confirmDestructive({
+      title: 'Désactiver la synchronisation ?',
+      message:
+        'Vos notes restent sur cet appareil et sur le serveur, mais ne seront plus échangées.',
+      confirmLabel: 'Désactiver',
+    });
+    if (confirmed) disable();
+  };
+
+  if (!config.enabled) {
+    return (
+      <View style={styles.section}>
+        <ThemedText type="subtitle">Synchronisation</ThemedText>
+        <ThemedText themeColor="textSecondary" type="small">
+          Désactivée : aucune donnée ne quitte cet appareil. Une fois activée, vos notes sont
+          chiffrées ici avant d&apos;être envoyées ; le serveur ne peut pas les lire.
+        </ThemedText>
+        <TextField
+          accessibilityLabel="Adresse de l'instance Supabase"
+          placeholder="https://exemple.supabase.co"
+          value={url}
+          onChangeText={setUrl}
+          autoCapitalize="none"
+          autoCorrect={false}
+          keyboardType="url"
+        />
+        <TextField
+          accessibilityLabel="Clé publique de l'instance"
+          placeholder="Clé publique (anon) de l'instance"
+          value={anonKey}
+          onChangeText={setAnonKey}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+        <Button
+          label={busy ? 'Connexion…' : 'Activer la synchronisation'}
+          disabled={busy || url.trim() === '' || anonKey.trim() === ''}
+          onPress={activate}
+        />
+        {error && (
+          <ThemedText themeColor="danger" type="small">
+            {error}
+          </ThemedText>
+        )}
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.section}>
+      <ThemedText type="subtitle">Synchronisation</ThemedText>
+      <ThemedText themeColor="textSecondary" type="small">
+        Instance : {config.url}
+      </ThemedText>
+      <ThemedText themeColor="textSecondary" type="small">
+        {status.state === 'syncing'
+          ? 'Synchronisation en cours…'
+          : status.lastSyncAt
+            ? `Dernière synchronisation à ${new Date(status.lastSyncAt).toLocaleTimeString()}`
+            : 'Pas encore synchronisé'}
+      </ThemedText>
+      {status.conflicts > 0 && (
+        <ThemedText themeColor="textSecondary" type="small">
+          {status.conflicts} note(s) modifiée(s) sur deux appareils : l&apos;autre version est
+          conservée dans une « copie de conflit ».
+        </ThemedText>
+      )}
+      {status.state === 'error' && (
+        <ThemedText themeColor="danger" type="small">
+          {status.error}
+        </ThemedText>
+      )}
+      <Button
+        label="Synchroniser maintenant"
+        disabled={status.state === 'syncing' || status.state === 'off'}
+        onPress={syncNow}
+      />
+      <Button label="Désactiver la synchronisation" onPress={deactivate} />
     </View>
   );
 }

@@ -41,12 +41,14 @@ const SAVE_DELAY_MS = 400;
 
 export default function NoteScreen() {
   const { id, category } = useLocalSearchParams<{ id: string; category?: string }>();
-  const { store, invalidate } = useNotes();
+  const { store, revision, invalidate } = useNotes();
   const isNew = id === 'new';
   const [note, setNote] = useState<Note | null>(() =>
     isNew ? createNote(Date.now(), category || null) : null,
   );
   const [missing, setMissing] = useState(false);
+  // Change quand la note est remplacée par une version venue d'un autre appareil.
+  const [generation, setGeneration] = useState(0);
 
   useEffect(() => {
     if (!store || isNew) return;
@@ -76,7 +78,21 @@ export default function NoteScreen() {
       </ThemedView>
     );
   }
-  return <NoteEditor initial={note} isNew={isNew} store={store} onChanged={invalidate} />;
+  return (
+    <NoteEditor
+      key={generation}
+      initial={note}
+      isNew={isNew && generation === 0}
+      store={store}
+      revision={revision}
+      onChanged={invalidate}
+      onReplaced={(replacement) => {
+        if (replacement) setNote(replacement);
+        else setMissing(true);
+        setGeneration((value) => value + 1);
+      }}
+    />
+  );
 }
 
 type NoteEditorProps = {
@@ -84,11 +100,15 @@ type NoteEditorProps = {
   /** La note n'a encore jamais été enregistrée. */
   isNew: boolean;
   store: NoteStore;
+  /** Change à chaque écriture dans la base, y compris par la synchronisation. */
+  revision: number;
   /** Appelé après chaque écriture, pour rafraîchir les listes. */
   onChanged: () => void;
+  /** La synchronisation a remplacé (ou supprimé : `null`) la note affichée. */
+  onReplaced: (replacement: Note | null) => void;
 };
 
-function NoteEditor({ initial, isNew, store, onChanged }: NoteEditorProps) {
+function NoteEditor({ initial, isNew, store, revision, onChanged, onReplaced }: NoteEditorProps) {
   const theme = useTheme();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -102,6 +122,8 @@ function NoteEditor({ initial, isNew, store, onChanged }: NoteEditorProps) {
   const latest = useRef(initial);
   const persisted = useRef<Note | null>(isNew ? null : initial);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** L'écran se ferme après une suppression définitive faite ici. */
+  const leaving = useRef(false);
   const inTrash = note.deletedAt !== null;
 
   const flush = async () => {
@@ -146,6 +168,26 @@ function NoteEditor({ initial, isNew, store, onChanged }: NoteEditorProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- uniquement à la fermeture
   }, []);
 
+  // Une version venue d'un autre appareil remplace la note affichée, sauf si
+  // des modifications locales attendent d'être enregistrées (elles l'emportent).
+  useEffect(() => {
+    let cancelled = false;
+    store.getNote(initial.id).then(
+      (stored) => {
+        const known = persisted.current;
+        if (cancelled || leaving.current || !known || latest.current !== known) return;
+        if (!stored || stored.updatedAt !== known.updatedAt) onReplaced(stored);
+      },
+      () => {
+        // Base fermée entre-temps (verrouillage).
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- uniquement quand la base change
+  }, [revision]);
+
   const bodyRef = useRef<NoteBodyHandle>(null);
 
   /** Dernier état de la note, avec ce que l'éditeur n'a pas encore transmis. */
@@ -168,6 +210,7 @@ function NoteEditor({ initial, isNew, store, onChanged }: NoteEditorProps) {
     });
     if (!confirmed) return;
     if (timer.current) clearTimeout(timer.current);
+    leaving.current = true;
     await store.deleteNote(note.id);
     // Empêche l'enregistrement de fermeture de recréer la note.
     persisted.current = latest.current;

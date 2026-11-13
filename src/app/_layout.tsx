@@ -3,6 +3,7 @@ import { StatusBar } from 'expo-status-bar';
 
 import { Colors } from '@/constants/theme';
 import { NotesProvider } from '@/notes/notes-context';
+import { SyncProvider } from '@/sync/sync-context';
 import { ThemePreferenceProvider, useThemePreference } from '@/theme/theme-preference';
 import { useVault, VaultProvider } from '@/vault/vault-context';
 
@@ -11,7 +12,9 @@ export default function RootLayout() {
     <ThemePreferenceProvider>
       <VaultProvider>
         <NotesProvider>
-          <Navigation />
+          <SyncProvider>
+            <Navigation />
+          </SyncProvider>
         </NotesProvider>
       </VaultProvider>
     </ThemePreferenceProvider>

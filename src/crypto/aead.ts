@@ -86,6 +86,18 @@ export function utf8Decode(bytes: Uint8Array): string {
   return sodium.to_string(bytes);
 }
 
+/** Base64 « URL », sans remplissage (variante par défaut de libsodium). */
 export function toBase64(bytes: Uint8Array): string {
   return sodium.to_base64(bytes);
+}
+
+/** Inverse de `toBase64`. Lève une erreur si le texte n'est pas du base64 valide. */
+export function fromBase64(text: string): Uint8Array {
+  return sodium.from_base64(text);
+}
+
+/** Empreinte BLAKE2b de 256 bits d'un texte, sous une clé. */
+export function keyedHash(message: string, key: Uint8Array): Uint8Array {
+  assertKey(key);
+  return sodium.crypto_generichash(KEY_BYTES, message, key);
 }

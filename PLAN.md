@@ -1,7 +1,7 @@
 # Secure Notes — plan de développement
 
 > Document de reprise pour les prochaines sessions. Dernière mise à jour : 2026-11-13.
-> État : **phases 0 à 3 terminées**. Prochaine étape : phase 4 (synchro Supabase).
+> État : **phases 0 à 4 terminées**. Prochaine étape : phase 5 (pièces jointes et images).
 
 ## 1. Objectif
 
@@ -53,6 +53,8 @@ cloud optionnelle via Supabase. Le serveur ne doit jamais voir de données en cl
 | Base locale | SQLite chiffrée (SQLCipher via `expo-sqlite`), source de vérité | Mode hors ligne natif, données chiffrées au repos |
 | Conflits de synchro | Dernier écrit gagne, par note, avec copie de conflit | Simple et sans perte silencieuse |
 | Hébergement web | **Cloudflare Pages** (offre gratuite), sous-domaine relié par un CNAME dans la zone DNS OVH | Statique, gratuit, pas besoin de déplacer le domaine |
+| Client Supabase | Appels HTTP directs (Auth + PostgREST), **sans `supabase-js`** | Trois requêtes suffisent ; moins de code tiers à auditer, aucune dépendance native, réutilisable tel quel sur la page de lecture web |
+| Mot de passe du compte | Dérivé du secret d'authentification **et de l'adresse de l'instance** | Une instance malveillante n'apprend rien qui permette de se connecter ailleurs (et d'y supprimer les notes). Contrepartie : tous les appareils doivent saisir exactement la même adresse |
 | Plateformes | iOS et Android | Voir ligne « App web complète » |
 
 ### Encore ouvert
@@ -148,7 +150,7 @@ Chaque phase tient en principe en une session et se termine par un résultat vé
 - [x] Phase 1 — Crypto et création du coffre (voir « Bilan de la phase 1 »)
 - [x] Phase 2 — Notes locales
 - [x] Phase 3 — Éditeur
-- [ ] Phase 4 — Synchro Supabase
+- [x] Phase 4 — Synchro Supabase (voir « Bilan de la phase 4 »)
 - [ ] Phase 5 — Pièces jointes et images
 - [ ] Phase 6 — Partage par lien
 - [ ] Phase 7 — Export, recréation de compte, finitions
@@ -371,6 +373,91 @@ Constats à retenir :
   (« Réglages », « Exporter ») sur l'émulateur.
 - Le navigateur n'est plus utilisé pour vérifier l'app (décision de l'utilisateur) :
   le web ne servira qu'à la page de lecture des liens partagés.
+
+### Bilan de la phase 4 (terminée le 2026-11-13, sur deux émulateurs Android)
+
+Fait :
+- `supabase/migrations/20261113000000_sync.sql` : tables `profiles` (quota, pour la
+  phase 5) et `items`, RLS par compte, pas de suppression de ligne, numéro de
+  modification `seq` attribué par un déclencheur. Réglage requis sur l'instance : « Confirm email » désactivé.
+- `src/sync/codec.ts` : chaque envoi tire une clé aléatoire, chiffrée par la clé
+  d'enveloppe ; l'identifiant de l'élément est authentifié avec le blob. Le serveur
+  ne distingue pas une note d'une catégorie, ni une modification d'une suppression.
+- Une suppression définitive est un message chiffré comme un autre : un appareil
+  ne supprime que si le message se déchiffre avec la clé du compte. Qui contrôle le
+  serveur ne peut donc pas faire supprimer des notes (ligne vidée, suppression
+  d'une autre note rejouée, autre clé : ignorées, couvert par Jest).
+- `src/sync/engine.ts` : téléchargement de ce qui suit le dernier `seq` vu, puis
+  envoi des éléments modifiés en précisant la version remplacée (refus du serveur si
+  elle est dépassée, et on recommence).
+- `src/sync/supabase.ts` : connexion, création du compte au premier usage, lecture
+  et écriture de `items`. Adresse `<identifiant>@securenotes.invalid`.
+- `src/sync/sync-context.tsx` : synchro à l'ouverture du coffre, 2 s après une
+  écriture locale, au retour au premier plan et toutes les 30 s.
+- Réglages → Synchronisation : adresse et clé de l'instance, activation (rien n'est
+  enregistré tant que l'instance n'a pas accepté la connexion), désactivation,
+  « Synchroniser maintenant », état. Désactivée par défaut.
+- Base locale en version 2 : colonnes `dirty` et `server_seq`, tables `tombstones`
+  et `sync_state`. Changer d'instance remet l'état de synchro à zéro et renvoie tout.
+- Une note ouverte est rechargée si elle change sur un autre appareil, sauf si des
+  modifications locales attendent d'être enregistrées.
+- 95 tests Jest (23 nouveaux) ; types et lint passent.
+
+Vérifié sur `Pixel_10` et `Small_Tablet`, même coffre, instance Supabase hébergée
+(clé « publishable ») :
+- Activation : compte créé sur le premier appareil, connexion sur le second.
+- Une note créée sur l'un apparaît sur l'autre, dans les deux sens.
+- Même note modifiée hors ligne (mode avion) des deux côtés : la plus récente
+  l'emporte, l'autre est gardée en « (copie de conflit) », sur les deux appareils.
+- Mise à la corbeille puis suppression définitive : propagées.
+- Sans session, l'API refuse la lecture de `items` et de `profiles`.
+
+Non vérifié :
+- iOS (pas de Mac).
+- Le contenu des lignes côté serveur n'a pas été relu (pas d'accès au tableau de
+  bord) ; le chiffrement est couvert par Jest.
+- La mise à niveau d'une base contenant déjà des notes de la phase 3 (l'app n'était
+  plus installée sur l'émulateur : seule une base neuve a été migrée).
+- Les suppressions chiffrées sur appareil : la vérification sur émulateurs a été
+  faite avec la première forme (marqueur `deleted` en clair), remplacée ensuite.
+- Catégories entre appareils, changement d'instance, désactivation, expiration de
+  session (1 h), plus de 200 éléments : couverts par Jest seulement.
+- Qu'aucune requête n'est émise tant que la synchro est désactivée (non mesuré).
+
+Règles de conflit :
+- Note modifiée des deux côtés : la date de modification la plus récente l'emporte,
+  l'autre version devient une nouvelle note. Catégories : la plus récente, sans copie.
+- Une modification l'emporte toujours sur une suppression définitive.
+- Deux modifications identiques ne créent pas de copie.
+
+Limites connues :
+- Une version distante reçue pendant la fraction de seconde où une frappe attend
+  d'être enregistrée dans la même note est écrasée sans copie.
+- Les dates comparées sont celles des appareils : une horloge fausse fausse le choix
+  du gagnant (l'autre version reste dans la copie).
+- Le serveur n'authentifie que la session, pas le contenu : c'est l'appareil qui
+  vérifie, au déchiffrement. Le serveur peut encore resservir une ancienne version
+  d'un élément (y compris une ancienne suppression d'une note recréée depuis) ou
+  retenir des mises à jour, sans être détecté.
+- Les lignes supprimées restent sur le serveur, sous forme de petit blob chiffré.
+- Pas de temps réel : jusqu'à 30 s de délai entre deux appareils.
+
+Constats à retenir :
+- Aucune dépendance native ajoutée : l'APK de développement de la phase 3 a servi
+  tel quel. S'il faut reconstruire, ne viser que l'architecture utile :
+  `-PreactNativeArchitectures=x86_64` pour l'émulateur.
+- `.env.local` (non versionné) : `EXPO_PUBLIC_SUPABASE_URL` et
+  `EXPO_PUBLIC_SUPABASE_ANON_KEY` préremplissent les champs ; relancer Metro après
+  modification.
+- Supabase hébergé accepte les adresses en `.invalid` et la clé `sb_publishable_…`.
+- Le bouton flottant des outils de développement recouvre « Réglages » : ouvrir
+  l'écran par `adb shell am start -a android.intent.action.VIEW -d securenotes://settings`.
+- `adb shell cmd connectivity airplane-mode enable|disable` pour simuler le hors-ligne.
+- L'instance d'essai a été créée avec la première forme de la migration : elle garde
+  une colonne `deleted` inutilisée (`alter table public.items drop constraint
+  items_tombstone, drop column deleted;` pour l'aligner).
+- Les deux émulateurs portent un coffre d'essai dont la phrase figure dans les
+  journaux de la session ; son compte existe sur l'instance Supabase.
 
 ## 5. Points d'attention
 
