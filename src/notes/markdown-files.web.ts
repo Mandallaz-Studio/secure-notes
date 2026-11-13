@@ -5,6 +5,6 @@ export async function shareMarkdown(_title: string, _markdown: string): Promise<
   throw new Error("L'export n'est pas disponible sur le web.");
 }
 
-export async function pickMarkdown(): Promise<{ name: string; markdown: string } | null> {
+export async function pickTextFile(): Promise<{ name: string; bytes: Uint8Array } | null> {
   throw new Error("L'import n'est pas disponible sur le web.");
 }

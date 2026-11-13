@@ -7,7 +7,7 @@ import type { RichMark, RichNode } from '@/notes/rich-text';
  * par `==texte==` (sa couleur est perdue) et la couleur du texte est perdue.
  * L'éditeur n'a ni bloc de code ni ligne de séparation : à l'import, un bloc
  * de code devient un paragraphe en police de code et les séparations sont
- * ignorées.
+ * ignorées. Une image est exportée avec son contenu (`![](data:…)`).
  */
 
 // --- Export ---------------------------------------------------------------
@@ -125,6 +125,8 @@ function blockToMarkdown(node: RichNode): string {
         .split('\n')
         .map((line) => (line === '' ? '>' : `> ${line}`))
         .join('\n');
+    case 'image':
+      return `![${escapeText(String(node.attrs?.alt ?? ''))}](${String(node.attrs?.src ?? '')})`;
     case 'paragraph':
       return inlineToMarkdown(node.content).split('\n').map(escapeLineStart).join('\n');
     default:
@@ -247,6 +249,12 @@ const LIST_ITEM = /^(\s*)([-*+]|\d+[.)])(\s+)(.*)$/;
 const RULE = /^\s*([-*_])(\s*\1){2,}\s*$/;
 const FENCE = /^\s*(```|~~~)/;
 const TASK = /^\[([ xX])\]\s+(.*)$/;
+/**
+ * Image seule sur sa ligne. Seules les images incluses dans le fichier sont
+ * reprises : une adresse distante ferait sortir une requête de l'app à chaque
+ * ouverture de la note.
+ */
+const IMAGE = /^\s{0,3}!\[([^\]]*)\]\((data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+)\)\s*$/;
 
 function parseList(lines: string[], start: number): { node: RichNode; next: number } {
   const first = LIST_ITEM.exec(lines[start])!;
@@ -338,6 +346,13 @@ function parseBlocks(lines: string[]): RichNode[] {
       continue;
     }
 
+    const image = IMAGE.exec(line);
+    if (image) {
+      blocks.push({ type: 'image', attrs: { src: image[2], alt: image[1] || null, title: null } });
+      i++;
+      continue;
+    }
+
     const heading = /^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/.exec(line);
     if (heading) {
       const content = parseInline(heading[2]);
@@ -402,5 +417,5 @@ export function markdownToNote(markdown: string, fileName: string): { title: str
     const title = (first.content ?? []).map((node) => node.text ?? '').join('');
     return { title, doc: { type: 'doc', content: rest.length > 0 ? rest : [{ type: 'paragraph' }] } };
   }
-  return { title: fileName.replace(/\.(md|markdown|txt)$/i, ''), doc };
+  return { title: fileName.replace(/\.[^./\\]+$/, ''), doc };
 }

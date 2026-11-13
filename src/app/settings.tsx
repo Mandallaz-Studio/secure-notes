@@ -8,12 +8,12 @@ import { TextField } from '@/components/text-field';
 import { ThemedText } from '@/components/themed-text';
 import { NotePalette, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
-import { markdownToNote } from '@/notes/markdown';
-import { markdownFilesSupported, pickMarkdown } from '@/notes/markdown-files';
+import { markdownFilesSupported, pickTextFile } from '@/notes/markdown-files';
 import { createNote, withBody, withTitle } from '@/notes/model';
 import { useNotes } from '@/notes/notes-context';
 import { submitNote } from '@/notes/pending-notes';
 import { contentOfDoc } from '@/notes/rich-text';
+import { fileToNote, ImportError } from '@/notes/text-import';
 import { useSync } from '@/sync/sync-context';
 import { useThemePreference, type ThemePreference } from '@/theme/theme-preference';
 import { useVault } from '@/vault/vault-context';
@@ -163,13 +163,13 @@ function ImportSection() {
   const { store } = useNotes();
   const [error, setError] = useState<string | null>(null);
 
-  const importMarkdown = async () => {
+  const importFile = async () => {
     if (!store) return;
     setError(null);
     try {
-      const picked = await pickMarkdown();
+      const picked = await pickTextFile();
       if (!picked) return;
-      const { title, doc } = markdownToNote(picked.markdown, picked.name);
+      const { title, doc } = fileToNote(picked.name, picked.bytes);
       const now = Date.now();
       const note = withBody(withTitle(createNote(now), title, now), contentOfDoc(doc), now);
       // Si le coffre s'est verrouillé pendant le choix du fichier, la note est
@@ -178,7 +178,11 @@ function ImportSection() {
         router.push({ pathname: '/note/[id]', params: { id: note.id } });
       }
     } catch (cause) {
-      setError(`Le fichier n'a pas pu être importé : ${String(cause)}`);
+      setError(
+        cause instanceof ImportError
+          ? cause.message
+          : `Le fichier n'a pas pu être importé : ${String(cause)}`,
+      );
     }
   };
 
@@ -186,9 +190,10 @@ function ImportSection() {
     <View style={styles.section}>
       <ThemedText type="subtitle">Import</ThemedText>
       <ThemedText themeColor="textSecondary" type="small">
-        Crée une note à partir d&apos;un fichier Markdown (.md).
+        Crée une note à partir d&apos;un fichier texte : Markdown (.md), texte brut (.txt), RTF, ou
+        tout autre format texte (CSV, JSON, code…). La mise en forme Markdown est conservée.
       </ThemedText>
-      <Button label="Importer un fichier Markdown" disabled={!store} onPress={importMarkdown} />
+      <Button label="Importer un fichier" disabled={!store} onPress={importFile} />
       {error && (
         <ThemedText themeColor="danger" type="small">
           {error}

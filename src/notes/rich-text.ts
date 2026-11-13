@@ -48,16 +48,21 @@ export function parseDoc(body: string): RichNode | null {
 
 const BLOCKS_WITH_OWN_LINE = new Set(['paragraph', 'heading']);
 
+/** Ce qui tient lieu de texte pour une image, dans l'aperçu et la recherche. */
+export const IMAGE_PLACEHOLDER = '[image]';
+
 /** Texte brut du document, une ligne par bloc : sert à l'aperçu et à la recherche. */
 export function plainTextOf(doc: RichNode): string {
   const lines: string[] = [];
   const inline = (node: RichNode): string => {
     if (node.type === 'text') return node.text ?? '';
     if (node.type === 'hardBreak') return '\n';
+    if (node.type === 'image') return IMAGE_PLACEHOLDER;
     return (node.content ?? []).map(inline).join('');
   };
   const walk = (node: RichNode) => {
-    if (BLOCKS_WITH_OWN_LINE.has(node.type)) lines.push(inline(node));
+    if (node.type === 'image') lines.push(IMAGE_PLACEHOLDER);
+    else if (BLOCKS_WITH_OWN_LINE.has(node.type)) lines.push(inline(node));
     else (node.content ?? []).forEach(walk);
   };
   walk(doc);

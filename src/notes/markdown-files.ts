@@ -3,8 +3,9 @@ import { Directory, File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 
 import { markdownFileName } from '@/notes/markdown';
+import { ImportError, MAX_IMPORT_BYTES } from '@/notes/text-import';
 
-/** L'import et l'export de fichiers Markdown existent sur cette plateforme. */
+/** L'import et l'export de fichiers existent sur cette plateforme. */
 export const markdownFilesSupported = true;
 
 /** Délai laissé à l'app destinataire pour lire le fichier avant sa suppression. */
@@ -51,18 +52,25 @@ export async function shareMarkdown(title: string, markdown: string): Promise<vo
   }
 }
 
-/** Fait choisir un fichier Markdown ; `null` si l'utilisateur annule. */
-export async function pickMarkdown(): Promise<{ name: string; markdown: string } | null> {
+/**
+ * Fait choisir un fichier à importer, quel que soit son type ; `null` si
+ * l'utilisateur annule. C'est le contenu qui dit ensuite s'il s'agit de texte.
+ * @throws ImportError si le fichier est trop volumineux.
+ */
+export async function pickTextFile(): Promise<{ name: string; bytes: Uint8Array } | null> {
   const result = await DocumentPicker.getDocumentAsync({
-    // Selon l'appareil, un `.md` est annoncé comme Markdown, texte ou fichier quelconque.
-    type: ['text/*', 'application/octet-stream'],
+    // Selon l'appareil, un même fichier texte est annoncé sous des types très variés.
+    type: '*/*',
     copyToCacheDirectory: true,
   });
   if (result.canceled) return null;
   const asset = result.assets[0];
   const copy = new File(asset.uri);
   try {
-    return { name: asset.name, markdown: await copy.text() };
+    if ((asset.size ?? copy.size) > MAX_IMPORT_BYTES) {
+      throw new ImportError('Ce fichier est trop volumineux (2 Mo au maximum).');
+    }
+    return { name: asset.name, bytes: new Uint8Array(await copy.arrayBuffer()) };
   } finally {
     // La copie de travail en clair ne reste pas dans le cache.
     if (copy.exists) copy.delete();

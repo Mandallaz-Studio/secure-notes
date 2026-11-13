@@ -17,6 +17,7 @@ import {
   type NoteHighlightColor,
   type NoteTextColor,
 } from '@/constants/theme';
+import { pickImage } from '@/notes/image-files';
 import { contentOfDoc, docOfContent, toDisplayDoc, toStoredDoc, type RichNode } from '@/notes/rich-text';
 import { useThemePreference } from '@/theme/theme-preference';
 
@@ -45,7 +46,8 @@ const sameColor = (a: string | undefined, b: string) => a?.toLowerCase() === b.t
  * Markdown de TipTap sont actifs à la frappe (`# `, `- `, `**gras**`…).
  *
  * Les couleurs sont stockées sous forme de jetons de palette et affichées dans
- * la teinte du thème courant : voir `rich-text.ts`.
+ * la teinte du thème courant : voir `rich-text.ts`. Les images sont incluses
+ * dans le document : voir `image-files.ts`.
  */
 export function NoteBody({ initial, editable, onChange, ref }: NoteBodyProps) {
   const { scheme } = useThemePreference();
@@ -105,6 +107,7 @@ export function NoteBody({ initial, editable, onChange, ref }: NoteBodyProps) {
        code { background-color: ${colors.backgroundElement}; border-radius: 4px; padding: 1px 4px; }
        blockquote { border-left: 3px solid ${colors.border}; margin-left: 0; padding-left: 12px;
                     color: ${colors.textSecondary}; }
+       img { display: block; border-radius: 8px; margin: 8px 0; }
        .ProseMirror p.is-editor-empty:first-child::before { color: ${colors.textSecondary}; }`,
       'app-theme',
     );
@@ -120,13 +123,34 @@ export function NoteBody({ initial, editable, onChange, ref }: NoteBodyProps) {
     });
   }, [editor, scheme]);
 
-  const showToolbar = editable && state.isFocused;
+  const [imageError, setImageError] = useState<string | null>(null);
+  /** Le sélecteur d'images est ouvert : l'éditeur a perdu le focus, la barre reste. */
+  const [pickingImage, setPickingImage] = useState(false);
+  const insertImage = async () => {
+    setImageError(null);
+    setPickingImage(true);
+    try {
+      const image = await pickImage();
+      if (image) editor.setImage(image);
+    } catch (cause) {
+      setImageError(`L'image n'a pas pu être ajoutée : ${String(cause)}`);
+    } finally {
+      setPickingImage(false);
+    }
+  };
+
+  const showToolbar = editable && (state.isFocused || pickingImage);
 
   return (
     <View style={styles.container}>
       <View style={styles.editor}>
         <RichText editor={editor} />
       </View>
+      {imageError && (
+        <ThemedText themeColor="danger" type="small" style={styles.error}>
+          {imageError}
+        </ThemedText>
+      )}
       {showToolbar && (
         <View style={[styles.toolbar, { borderColor: colors.border }]}>
           <ScrollView
@@ -136,6 +160,8 @@ export function NoteBody({ initial, editable, onChange, ref }: NoteBodyProps) {
             contentContainerStyle={styles.toolbarContent}>
             <Tool label="↶" name="Annuler" disabled={!state.canUndo} onPress={editor.undo} />
             <Tool label="↷" name="Rétablir" disabled={!state.canRedo} onPress={editor.redo} />
+            <Separator />
+            <Tool label="🖼" name="Ajouter une image" disabled={pickingImage} onPress={insertImage} />
             <Separator />
             <Tool label="G" name="Gras" bold active={state.isBoldActive} onPress={editor.toggleBold} />
             <Tool
@@ -305,6 +331,7 @@ function Separator() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   editor: { flex: 1, paddingHorizontal: Spacing.three },
+  error: { paddingHorizontal: Spacing.three, paddingBottom: Spacing.one },
   toolbar: { borderTopWidth: StyleSheet.hairlineWidth },
   toolbarContent: {
     alignItems: 'center',

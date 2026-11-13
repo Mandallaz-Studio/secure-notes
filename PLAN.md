@@ -459,6 +459,28 @@ Constats à retenir :
 - Les deux émulateurs portent un coffre d'essai dont la phrase figure dans les
   journaux de la session ; son compte existe sur l'instance Supabase.
 
+### Hors phase : images dans les notes et import de fichiers texte (2026-11-13)
+
+Fait, vérifié sur l'émulateur Android (`Pixel_10`) ; 111 tests Jest :
+- **Images** : bouton 🖼 dans la barre d'outils de l'éditeur (`src/notes/image-files.ts`).
+  L'image est réduite à 1600 px de côté, recompressée en JPEG (métadonnées retirées) et
+  **incluse dans le document de la note** (adresse `data:`). Elle est donc chiffrée dans
+  la base et synchronisée avec la note, sans changement côté serveur. Export Markdown :
+  `![](data:…)`, repris à l'import ; les images distantes ne sont jamais importées.
+- **Import** (`src/notes/text-import.ts`) : tout fichier texte. Markdown converti, RTF
+  réduit à son texte, le reste (`.txt`, `.csv`, `.json`, code…) en texte brut. UTF-8,
+  UTF-16 avec marque d'ordre, sinon Windows-1252. Binaire ou plus de 2 Mo : refusé.
+- Nouvelle dépendance native : `expo-image-manipulator` (APK de développement reconstruit).
+
+Écart par rapport à la phase 5, qui reste à faire : ces images ne sont **pas comptées
+dans le quota**, ne passent pas par le bucket Storage, et la note entière (images
+comprises) est renvoyée à chaque modification. La phase 5 devra sortir les images
+`data:` des documents vers des pièces jointes chiffrées par blocs. Pas de collage
+d'image depuis le presse-papiers, pas de pièces jointes génériques.
+
+Non vérifié : iOS ; la synchro d'une note avec image entre deux appareils ; une vraie
+photo d'appareil (essai fait avec un JPEG de 4000 × 3000 généré).
+
 ## 5. Points d'attention
 
 - **Dev build obligatoire** dès la phase 0 : libsodium natif et SQLCipher ne
