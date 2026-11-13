@@ -1,6 +1,13 @@
 import sodium from 'react-native-libsodium';
 
-import type { BodyContent, Category, Note, NoteFilter, NoteSummary } from '@/notes/types';
+import type {
+  Attachment,
+  BodyContent,
+  Category,
+  Note,
+  NoteFilter,
+  NoteSummary,
+} from '@/notes/types';
 
 export const PREVIEW_LENGTH = 140;
 
@@ -65,12 +72,17 @@ export function createNote(now: number, categoryId: string | null = null): Note 
     createdAt: now,
     updatedAt: now,
     deletedAt: null,
+    attachments: [],
   };
 }
 
 /** Une note jamais remplie n'est pas conservée. */
-export function isBlank(note: Pick<Note, 'title' | 'plainText'>): boolean {
-  return note.title.trim() === '' && note.plainText.trim() === '';
+export function isBlank(note: Pick<Note, 'title' | 'plainText' | 'attachments'>): boolean {
+  return note.title.trim() === '' && note.plainText.trim() === '' && note.attachments.length === 0;
+}
+
+export function withAttachments(note: Note, attachments: Attachment[], now: number): Note {
+  return { ...note, attachments, updatedAt: now };
 }
 
 export function withText(note: Note, title: string, text: string, now: number): Note {

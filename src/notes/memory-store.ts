@@ -1,5 +1,7 @@
+import { blobIdsOf } from '@/notes/blobs';
 import { foldText, matchesFilter, summarize } from '@/notes/model';
 import type {
+  BlobState,
   Category,
   Note,
   NoteFilter,
@@ -25,6 +27,7 @@ export class MemoryNoteStore implements NoteStore {
   /** Suppressions à envoyer : identifiant → version du serveur à remplacer. */
   private tombstones = new Map<string, number>();
   private syncValues = new Map<string, string>();
+  private blobs = new Map<string, { data: Uint8Array; uploaded: boolean; createdAt: number }>();
 
   async listNotes(filter: NoteFilter): Promise<NoteSummary[]> {
     return [...this.notes.values()]
@@ -152,6 +155,51 @@ export class MemoryNoteStore implements NoteStore {
     this.meta.set(entry.id, { dirty: current.updatedAt !== sent.updatedAt, serverSeq: seq });
   }
 
+  async putBlob(id: string, data: Uint8Array): Promise<void> {
+    if (!this.blobs.has(id)) {
+      this.blobs.set(id, { data: data.slice(), uploaded: false, createdAt: Date.now() });
+    }
+  }
+
+  async missingBlobs(ids: string[]): Promise<string[]> {
+    return ids.filter((id) => !this.blobs.has(id));
+  }
+
+  async getBlob(id: string): Promise<Uint8Array | null> {
+    return this.blobs.get(id)?.data.slice() ?? null;
+  }
+
+  async listBlobs(): Promise<BlobState[]> {
+    const referenced = new Set([...this.notes.values()].flatMap(blobIdsOf));
+    const states: BlobState[] = [...this.blobs].map(([id, blob]) => ({
+      id,
+      hasData: true,
+      uploaded: blob.uploaded,
+      referenced: referenced.has(id),
+      size: blob.data.length,
+      createdAt: blob.createdAt,
+    }));
+    for (const id of referenced) {
+      if (!this.blobs.has(id)) {
+        states.push({ id, hasData: false, uploaded: false, referenced: true, size: 0, createdAt: 0 });
+      }
+    }
+    return states;
+  }
+
+  async storeRemoteBlob(id: string, data: Uint8Array): Promise<void> {
+    this.blobs.set(id, { data: data.slice(), uploaded: true, createdAt: Date.now() });
+  }
+
+  async setBlobUploaded(id: string, uploaded: boolean): Promise<void> {
+    const blob = this.blobs.get(id);
+    if (blob) blob.uploaded = uploaded;
+  }
+
+  async deleteBlob(id: string): Promise<void> {
+    this.blobs.delete(id);
+  }
+
   async getSyncValue(key: string): Promise<string | null> {
     return this.syncValues.get(key) ?? null;
   }
@@ -161,6 +209,7 @@ export class MemoryNoteStore implements NoteStore {
   }
 
   async resetSync(): Promise<void> {
+    for (const blob of this.blobs.values()) blob.uploaded = false;
     this.meta.clear();
     this.tombstones.clear();
     this.syncValues.clear();
@@ -172,5 +221,6 @@ export class MemoryNoteStore implements NoteStore {
     this.meta.clear();
     this.tombstones.clear();
     this.syncValues.clear();
+    this.blobs.clear();
   }
 }

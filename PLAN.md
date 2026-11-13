@@ -1,7 +1,8 @@
 # Secure Notes — plan de développement
 
 > Document de reprise pour les prochaines sessions. Dernière mise à jour : 2026-11-13.
-> État : **phases 0 à 4 terminées**. Prochaine étape : phase 5 (pièces jointes et images).
+> État : **phases 0 à 5 terminées**. Prochaine étape : phase 6 (partage par lien).
+> À faire sur l'instance Supabase : appliquer `supabase/migrations/20261114000000_attachments.sql`.
 
 ## 1. Objectif
 
@@ -56,6 +57,7 @@ cloud optionnelle via Supabase. Le serveur ne doit jamais voir de données en cl
 | Client Supabase | Appels HTTP directs (Auth + PostgREST), **sans `supabase-js`** | Trois requêtes suffisent ; moins de code tiers à auditer, aucune dépendance native, réutilisable tel quel sur la page de lecture web |
 | Mot de passe du compte | Dérivé du secret d'authentification **et de l'adresse de l'instance** | Une instance malveillante n'apprend rien qui permette de se connecter ailleurs (et d'y supprimer les notes). Contrepartie : tous les appareils doivent saisir exactement la même adresse |
 | Plateformes | iOS et Android | Voir ligne « App web complète » |
+| Stockage des fichiers (phase 5) | Blocs chiffrés dans une table Postgres (`attachment_chunks`), **pas dans un bucket Storage** | Le quota est vérifié dans la transaction qui écrit le bloc ; les politiques de Storage ne connaissent pas la taille du fichier au moment où elles s'appliquent. Contrepartie : les fichiers occupent la base Postgres |
 
 ### Encore ouvert
 
@@ -151,7 +153,7 @@ Chaque phase tient en principe en une session et se termine par un résultat vé
 - [x] Phase 2 — Notes locales
 - [x] Phase 3 — Éditeur
 - [x] Phase 4 — Synchro Supabase (voir « Bilan de la phase 4 »)
-- [ ] Phase 5 — Pièces jointes et images
+- [x] Phase 5 — Pièces jointes et images (voir « Bilan de la phase 5 »)
 - [ ] Phase 6 — Partage par lien
 - [ ] Phase 7 — Export, recréation de compte, finitions
 
@@ -459,27 +461,62 @@ Constats à retenir :
 - Les deux émulateurs portent un coffre d'essai dont la phrase figure dans les
   journaux de la session ; son compte existe sur l'instance Supabase.
 
-### Hors phase : images dans les notes et import de fichiers texte (2026-11-13)
+### Hors phase : import de fichiers texte (2026-11-13)
 
-Fait, vérifié sur l'émulateur Android (`Pixel_10`) ; 111 tests Jest :
-- **Images** : bouton 🖼 dans la barre d'outils de l'éditeur (`src/notes/image-files.ts`).
-  L'image est réduite à 1600 px de côté, recompressée en JPEG (métadonnées retirées) et
-  **incluse dans le document de la note** (adresse `data:`). Elle est donc chiffrée dans
-  la base et synchronisée avec la note, sans changement côté serveur. Export Markdown :
-  `![](data:…)`, repris à l'import ; les images distantes ne sont jamais importées.
-- **Import** (`src/notes/text-import.ts`) : tout fichier texte. Markdown converti, RTF
-  réduit à son texte, le reste (`.txt`, `.csv`, `.json`, code…) en texte brut. UTF-8,
-  UTF-16 avec marque d'ordre, sinon Windows-1252. Binaire ou plus de 2 Mo : refusé.
-- Nouvelle dépendance native : `expo-image-manipulator` (APK de développement reconstruit).
+`src/notes/text-import.ts` : tout fichier texte s'importe (Réglages → Import). Markdown
+converti, RTF réduit à son texte, le reste (`.txt`, `.csv`, `.json`, code…) en texte
+brut. UTF-8, UTF-16 avec marque d'ordre, sinon Windows-1252. Binaire ou plus de 2 Mo :
+refusé. Vérifié sur l'émulateur (`.txt` Latin-1, `.rtf`, `.csv`, refus d'un JPEG).
 
-Écart par rapport à la phase 5, qui reste à faire : ces images ne sont **pas comptées
-dans le quota**, ne passent pas par le bucket Storage, et la note entière (images
-comprises) est renvoyée à chaque modification. La phase 5 devra sortir les images
-`data:` des documents vers des pièces jointes chiffrées par blocs. Pas de collage
-d'image depuis le presse-papiers, pas de pièces jointes génériques.
+### Bilan de la phase 5 (terminée le 2026-11-14, sur un émulateur Android)
 
-Non vérifié : iOS ; la synchro d'une note avec image entre deux appareils ; une vraie
-photo d'appareil (essai fait avec un JPEG de 4000 × 3000 généré).
+Fait :
+- **Blobs** (`src/notes/blobs.ts`) : le contenu d'une image ou d'un fichier joint est
+  stocké à part de la note, dans la base SQLCipher (table `blobs`, base en version 3).
+  La note n'en garde que l'identifiant : `src: "sn-blob:<id>"` dans le document pour une
+  image, champ `attachments` (nom, type, taille) pour un fichier. Un blob ne change jamais.
+- **Images** : bouton 🖼 de la barre d'outils. Image réduite à 1600 px, recompressée en
+  JPEG (métadonnées retirées). L'éditeur l'affiche en adresse `data:` ; à
+  l'enregistrement elle devient un blob. Les images `data:` restées dans d'anciennes
+  notes ou venues d'un import Markdown sont converties de la même façon à la première
+  modification. Une adresse distante est retirée (aucune requête ne sort de l'app).
+- **Fichiers joints** (écran de la note) : « ＋ Joindre un fichier » (20 Mo au plus),
+  ouverture par la feuille de partage, retrait avec confirmation.
+- **Chiffrement par blocs** (`src/crypto/chunks.ts`) : clé aléatoire par fichier,
+  chiffrée par la clé d'enveloppe ; blocs de 256 Kio ; chaque bloc authentifie
+  l'identifiant du fichier, son rang et le nombre total de blocs.
+- **Serveur** (`supabase/migrations/20261114000000_attachments.sql`) : tables
+  `attachments` et `attachment_chunks`, RLS par compte, colonne
+  `profiles.storage_used_bytes` tenue par déclencheur. Un bloc qui ferait dépasser
+  `storage_quota_bytes` est refusé (`storage_quota_exceeded`).
+- **Synchro** (`src/sync/blobs.ts`), après celle des notes : envoi des blobs référencés,
+  téléchargement de ceux qui manquent, reprise d'un envoi interrompu, suppression (ici
+  et sur le serveur) d'un blob que plus aucune note ne référence depuis 10 minutes.
+  Un échec côté fichiers ne bloque pas la synchro des notes.
+- **Réglages → Stockage** : place occupée sur l'appareil ; avec la synchro, jauge
+  « utilisé sur quota » et message si le serveur a refusé des fichiers.
+- 132 tests Jest (21 nouveaux) ; types et lint passent.
+
+Vérifié sur `Pixel_10` : mise à niveau d'une base de la veille (version 2 → 3, notes
+conservées), affichage d'une ancienne image `data:` puis sa conversion en blob à la
+première frappe, réouverture (image relue depuis son blob), ajout d'un fichier joint,
+ouverture (contenu exact dans la feuille de partage), indicateur de stockage.
+
+Non vérifié :
+- **Tout le côté serveur** : la migration n'a été ni appliquée ni exécutée (pas d'accès
+  au tableau de bord, pas de Postgres local). Le refus au-delà du quota, la reprise et
+  le ménage ne sont couverts que par Jest, contre un serveur simulé.
+- La synchro d'images et de fichiers entre deux appareils.
+- iOS ; un fichier joint de plusieurs Mo ; une vraie photo d'appareil.
+
+Limites connues :
+- Pas de collage d'image depuis le presse-papiers (bouton seulement).
+- Une image arrivée par synchro pendant que sa note est ouverte n'apparaît qu'à la
+  réouverture (image d'attente entre-temps).
+- Un appareil ne supprime du serveur que les blobs qu'il connaît : un blob dont le seul
+  appareil détenteur est effacé avant le ménage reste sur le serveur et occupe le quota.
+- Les notes elles-mêmes ne comptent pas dans le quota.
+- Un fichier ouvert quitte le coffre **en clair** (copie supprimée après 2 minutes).
 
 ## 5. Points d'attention
 

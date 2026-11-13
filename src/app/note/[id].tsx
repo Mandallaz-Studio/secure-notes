@@ -25,16 +25,25 @@ import {
   isBlank,
   restored,
   trashed,
+  newId,
   withArchived,
+  withAttachments,
   withBody,
   withCategory,
   withTitle,
 } from '@/notes/model';
 import { noteToMarkdown } from '@/notes/markdown';
-import { markdownFilesSupported, shareMarkdown } from '@/notes/markdown-files';
+import {
+  markdownFilesSupported,
+  pickAttachment,
+  shareFile,
+  shareMarkdown,
+} from '@/notes/markdown-files';
 import { useCategories, useNotes } from '@/notes/notes-context';
+import { formatBytes, newImageCache, toEditorImages } from '@/notes/blobs';
 import { docOfContent } from '@/notes/rich-text';
-import type { Note, NoteStore } from '@/notes/types';
+import { ImportError } from '@/notes/text-import';
+import type { Attachment, Note, NoteStore } from '@/notes/types';
 
 /** Délai entre la dernière frappe et l'enregistrement. */
 const SAVE_DELAY_MS = 400;
@@ -221,10 +230,67 @@ function NoteEditor({ initial, isNew, store, revision, onChanged, onReplaced }: 
   const exportMarkdown = async () => {
     try {
       const current = await currentNote();
-      await shareMarkdown(current.title, noteToMarkdown(current.title, docOfContent(current)));
+      // Les images sont incluses dans le fichier exporté.
+      const doc = await toEditorImages(docOfContent(current), store, newImageCache());
+      await shareMarkdown(current.title, noteToMarkdown(current.title, doc));
     } catch (cause) {
       setSaveError(`La note n'a pas pu être exportée : ${String(cause)}`);
     }
+  };
+
+  const describe = (action: string, cause: unknown) =>
+    setSaveError(cause instanceof ImportError ? cause.message : `${action} : ${String(cause)}`);
+
+  const attachFile = async () => {
+    try {
+      const picked = await pickAttachment();
+      if (!picked) return;
+      const attachment: Attachment = {
+        id: newId(),
+        name: picked.name,
+        mime: picked.mime,
+        size: picked.bytes.length,
+      };
+      // Le contenu d'abord : la note ne référence jamais un fichier absent.
+      await store.putBlob(attachment.id, picked.bytes);
+      const base = await currentNote();
+      await update(withAttachments(base, [...base.attachments, attachment], Date.now()), true);
+    } catch (cause) {
+      describe("Le fichier n'a pas pu être joint", cause);
+    }
+  };
+
+  const openAttachment = async (attachment: Attachment) => {
+    try {
+      const bytes = await store.getBlob(attachment.id);
+      if (!bytes) {
+        setSaveError(
+          `« ${attachment.name} » n'est pas encore sur cet appareil : il arrivera à la prochaine synchronisation.`,
+        );
+        return;
+      }
+      await shareFile(attachment.name, bytes, attachment.mime);
+    } catch (cause) {
+      describe("Le fichier n'a pas pu être ouvert", cause);
+    }
+  };
+
+  const removeAttachment = async (attachment: Attachment) => {
+    const confirmed = await confirmDestructive({
+      title: 'Retirer ce fichier ?',
+      message: `« ${attachment.name} » sera supprimé de la note.`,
+      confirmLabel: 'Retirer',
+    });
+    if (!confirmed) return;
+    const base = await currentNote();
+    await update(
+      withAttachments(
+        base,
+        base.attachments.filter((other) => other.id !== attachment.id),
+        Date.now(),
+      ),
+      true,
+    );
   };
 
   return (
@@ -289,11 +355,48 @@ function NoteEditor({ initial, isNew, store, revision, onChanged, onReplaced }: 
               </View>
             </ScrollView>
           )}
+          {markdownFilesSupported && (!inTrash || note.attachments.length > 0) && (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              style={styles.chipScroll}>
+              <View style={styles.chips}>
+                {note.attachments.map((attachment) => (
+                  <View
+                    key={attachment.id}
+                    style={[styles.attachment, { backgroundColor: theme.backgroundElement }]}>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Ouvrir ${attachment.name}`}
+                      onPress={() => void openAttachment(attachment)}>
+                      <ThemedText type="small" numberOfLines={1} style={styles.attachmentName}>
+                        📎 {attachment.name} · {formatBytes(attachment.size)}
+                      </ThemedText>
+                    </Pressable>
+                    {!inTrash && (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={`Retirer ${attachment.name}`}
+                        hitSlop={8}
+                        onPress={() => void removeAttachment(attachment)}>
+                        <ThemedText type="small" themeColor="textSecondary">
+                          ✕
+                        </ThemedText>
+                      </Pressable>
+                    )}
+                  </View>
+                ))}
+                {!inTrash && <Chip label="＋ Joindre un fichier" onPress={() => void attachFile()} />}
+              </View>
+            </ScrollView>
+          )}
         </View>
 
         <NoteBody
           ref={bodyRef}
           initial={initial}
+          store={store}
           editable={!inTrash}
           onChange={(content) => void update(withBody(latest.current, content, Date.now()))}
         />
@@ -353,6 +456,15 @@ const styles = StyleSheet.create({
   // Sans cela, la rangée défilante s'étire en hauteur.
   chipScroll: { flexGrow: 0 },
   chips: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
+  attachment: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.one + Spacing.half,
+    borderRadius: 999,
+  },
+  attachmentName: { maxWidth: 220 },
   error: { paddingHorizontal: Spacing.three, paddingBottom: Spacing.two },
   actions: {
     flexDirection: 'row',

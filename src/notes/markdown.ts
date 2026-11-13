@@ -149,6 +149,17 @@ export function noteToMarkdown(title: string, doc: RichNode): string {
   return `${[heading, body].filter((part) => part !== '').join('\n\n')}\n`;
 }
 
+/** Nom de fichier sans caractère interdit ni chemin. */
+export function safeFileName(name: string): string {
+  const safe = name
+    .trim()
+    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(-120);
+  return safe === '' || /^\.+$/.test(safe) ? 'fichier' : safe;
+}
+
 /** Nom de fichier sûr tiré du titre d'une note. */
 export function markdownFileName(title: string): string {
   const base = title

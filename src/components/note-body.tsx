@@ -17,8 +17,10 @@ import {
   type NoteHighlightColor,
   type NoteTextColor,
 } from '@/constants/theme';
+import { newImageCache, toEditorImages, toStoredImages, type ImageCache } from '@/notes/blobs';
 import { pickImage } from '@/notes/image-files';
 import { contentOfDoc, docOfContent, toDisplayDoc, toStoredDoc, type RichNode } from '@/notes/rich-text';
+import type { BodyContent } from '@/notes/types';
 import { useThemePreference } from '@/theme/theme-preference';
 
 /** Délai entre la dernière frappe et la lecture du contenu dans l'éditeur. */
@@ -46,14 +48,47 @@ const sameColor = (a: string | undefined, b: string) => a?.toLowerCase() === b.t
  * Markdown de TipTap sont actifs à la frappe (`# `, `- `, `**gras**`…).
  *
  * Les couleurs sont stockées sous forme de jetons de palette et affichées dans
- * la teinte du thème courant : voir `rich-text.ts`. Les images sont incluses
- * dans le document : voir `image-files.ts`.
+ * la teinte du thème courant : voir `rich-text.ts`. Les images sont
+ * enregistrées à part (blobs) et référencées par le document : voir `blobs.ts`.
  */
-export function NoteBody({ initial, editable, onChange, ref }: NoteBodyProps) {
+export function NoteBody(props: NoteBodyProps) {
+  const { initial, store } = props;
+  const [images] = useState(newImageCache);
+  const [prepared, setPrepared] = useState<RichNode | null>(null);
+
+  // Les images sont lues dans la base avant d'ouvrir l'éditeur.
+  useEffect(() => {
+    let cancelled = false;
+    const doc = docOfContent(initial);
+    toEditorImages(doc, store, images).then(
+      (ready) => {
+        if (!cancelled) setPrepared(ready);
+      },
+      () => {
+        if (!cancelled) setPrepared(doc);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- contenu lu une fois, à l'ouverture
+  }, []);
+
+  if (!prepared) return <View style={styles.container} />;
+  return <Editor {...props} prepared={prepared} images={images} />;
+}
+
+type EditorProps = NoteBodyProps & {
+  /** Document à l'ouverture, images incluses. */
+  prepared: RichNode;
+  images: ImageCache;
+};
+
+function Editor({ prepared, images, store, editable, onChange, ref }: EditorProps) {
   const { scheme } = useThemePreference();
   const colors = Colors[scheme];
   const palette = NotePalette[scheme];
-  const [initialDoc] = useState(() => toDisplayDoc(docOfContent(initial), scheme));
+  const [initialDoc] = useState(() => toDisplayDoc(prepared, scheme));
 
   const onChangeRef = useRef(onChange);
   useEffect(() => {
@@ -65,7 +100,15 @@ export function NoteBody({ initial, editable, onChange, ref }: NoteBodyProps) {
     timer.current = null;
   };
 
-  const readContent = async () => contentOfDoc((await editor.getJSON()) as RichNode);
+  /** Lectures en file : une image nouvelle n'est enregistrée qu'une fois. */
+  const reads = useRef<Promise<unknown>>(Promise.resolve());
+  const readContent = (): Promise<BodyContent> => {
+    const next = reads.current.then(async () =>
+      contentOfDoc(await toStoredImages((await editor.getJSON()) as RichNode, store, images)),
+    );
+    reads.current = next.catch(() => {});
+    return next;
+  };
 
   const editor = useEditorBridge({
     bridgeExtensions: [
@@ -80,7 +123,11 @@ export function NoteBody({ initial, editable, onChange, ref }: NoteBodyProps) {
       cancelPendingRead();
       timer.current = setTimeout(async () => {
         timer.current = null;
-        onChangeRef.current(await readContent());
+        try {
+          onChangeRef.current(await readContent());
+        } catch {
+          // Base fermée entre-temps (verrouillage) : rien à enregistrer.
+        }
       }, READ_DELAY_MS);
     },
   });

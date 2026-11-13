@@ -4,6 +4,17 @@
  */
 export type BodyFormat = 'text' | 'tiptap';
 
+/** Fichier joint à une note. Son contenu est un « blob » chiffré, stocké à part. */
+export type Attachment = {
+  /** Identifiant du blob. */
+  id: string;
+  name: string;
+  /** Type MIME annoncé à l'ajout. */
+  mime: string;
+  /** Taille en octets. */
+  size: number;
+};
+
 export type Note = {
   id: string;
   title: string;
@@ -18,6 +29,26 @@ export type Note = {
   updatedAt: number;
   /** Date de mise à la corbeille, ou `null` si la note n'y est pas. */
   deletedAt: number | null;
+  /** Fichiers joints. Les images du texte n'y figurent pas : le document les référence. */
+  attachments: Attachment[];
+};
+
+/**
+ * État local d'un blob (image d'une note ou fichier joint). Un blob ne change
+ * jamais : un nouveau contenu reçoit un nouvel identifiant.
+ */
+export type BlobState = {
+  id: string;
+  /** Le contenu est sur cet appareil. */
+  hasData: boolean;
+  /** Le contenu est sur le serveur (à la connaissance de cet appareil). */
+  uploaded: boolean;
+  /** Au moins une note, corbeille comprise, y fait référence. */
+  referenced: boolean;
+  /** Taille en octets ; 0 tant que le contenu n'est pas là. */
+  size: number;
+  /** Date d'arrivée sur cet appareil ; 0 tant que le contenu n'est pas là. */
+  createdAt: number;
 };
 
 /** Contenu d'une note tel que l'éditeur le fournit. */
@@ -83,6 +114,19 @@ export interface NoteStore {
    * Il reste « à envoyer » s'il a été modifié entre-temps.
    */
   markPushed(entry: SyncEntry, seq: number): Promise<void>;
+  /** Enregistre un blob créé sur cet appareil : il est « à envoyer ». */
+  putBlob(id: string, data: Uint8Array): Promise<void>;
+  /** Parmi `ids`, ceux dont le contenu n'est pas sur cet appareil. */
+  missingBlobs(ids: string[]): Promise<string[]>;
+  /** Contenu d'un blob ; `null` s'il n'est pas (encore) sur cet appareil. */
+  getBlob(id: string): Promise<Uint8Array | null>;
+  /** Blobs présents sur l'appareil ou référencés par une note. */
+  listBlobs(): Promise<BlobState[]>;
+  /** Enregistre un blob téléchargé du serveur. */
+  storeRemoteBlob(id: string, data: Uint8Array): Promise<void>;
+  setBlobUploaded(id: string, uploaded: boolean): Promise<void>;
+  deleteBlob(id: string): Promise<void>;
+
   getSyncValue(key: string): Promise<string | null>;
   setSyncValue(key: string, value: string): Promise<void>;
   /** Oublie tout état de synchronisation : tout est à renvoyer (changement d'instance). */

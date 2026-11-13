@@ -4,6 +4,12 @@ import { AppState } from 'react-native';
 import { useNotes } from '@/notes/notes-context';
 import type { NoteStore } from '@/notes/types';
 import { loadSyncConfig, saveSyncConfig, type SyncConfig } from '@/sync/config';
+import {
+  synchronizeBlobs,
+  type BlobRemote,
+  type BlobSyncResult,
+  type StorageUsage,
+} from '@/sync/blobs';
 import { synchronize, type SyncRemote, type SyncResult } from '@/sync/engine';
 import {
   credentialsFor,
@@ -20,6 +26,12 @@ export type SyncStatus = {
   error: string | null;
   /** Copies de conflit créées depuis l'ouverture du coffre. */
   conflicts: number;
+  /** Place occupée sur le serveur par les images et fichiers joints ; `null` : inconnue. */
+  usage: StorageUsage | null;
+  /** Images et fichiers que le serveur a refusés faute de place, à la dernière synchronisation. */
+  overQuota: number;
+  /** Les notes sont synchronisées, mais pas les images et fichiers joints. */
+  blobError: string | null;
 };
 
 type SyncContextValue = {
@@ -40,7 +52,25 @@ const WRITE_DELAY_MS = 2_000;
 /** Intervalle de relève quand l'app est au premier plan. */
 const POLL_INTERVAL_MS = 30_000;
 
-const OFF: SyncStatus = { state: 'off', lastSyncAt: null, error: null, conflicts: 0 };
+const OFF: SyncStatus = {
+  state: 'off',
+  lastSyncAt: null,
+  error: null,
+  conflicts: 0,
+  usage: null,
+  overQuota: 0,
+  blobError: null,
+};
+
+type RunOutcome = {
+  result: SyncResult | null;
+  error: string | null;
+  blobs: BlobSyncResult | null;
+  blobError: string | null;
+};
+
+const describe = (cause: unknown) =>
+  cause instanceof SyncError ? cause.message : `Synchronisation interrompue : ${String(cause)}`;
 
 /** Enchaîne les synchronisations : jamais deux à la fois, les demandes se cumulent. */
 class SyncRunner {
@@ -51,10 +81,10 @@ class SyncRunner {
 
   constructor(
     private readonly store: NoteStore,
-    private readonly remote: SyncRemote,
+    private readonly remote: SyncRemote & BlobRemote,
     private readonly wrapKey: Uint8Array,
     private readonly onStart: () => void,
-    private readonly onDone: (result: SyncResult | null, error: string | null) => void,
+    private readonly onDone: (outcome: RunOutcome) => void,
   ) {}
 
   request(delayMs = 0): void {
@@ -76,18 +106,24 @@ class SyncRunner {
     this.timer = null;
     this.running = true;
     this.onStart();
-    let result: SyncResult | null = null;
-    let error: string | null = null;
+    const outcome: RunOutcome = { result: null, error: null, blobs: null, blobError: null };
     try {
-      result = await synchronize(this.store, this.remote, this.wrapKey);
+      outcome.result = await synchronize(this.store, this.remote, this.wrapKey);
     } catch (cause) {
-      error =
-        cause instanceof SyncError ? cause.message : `Synchronisation interrompue : ${String(cause)}`;
+      outcome.error = describe(cause);
+    }
+    // Les images et fichiers suivent les notes ; leur échec ne remet pas en cause les notes.
+    if (outcome.result && !this.stopped) {
+      try {
+        outcome.blobs = await synchronizeBlobs(this.store, this.remote, this.wrapKey);
+      } catch (cause) {
+        outcome.blobError = describe(cause);
+      }
     }
     this.running = false;
     // Arrêté en cours de route (verrouillage) : la base est fermée, rien à signaler.
     if (this.stopped) return;
-    this.onDone(result, error);
+    this.onDone(outcome);
     if (this.again) {
       this.again = false;
       this.request(WRITE_DELAY_MS);
@@ -114,7 +150,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       remote,
       keys.wrapKey,
       () => setStatus((previous) => ({ ...previous, state: 'syncing' })),
-      (result, error) => {
+      ({ result, error, blobs, blobError }) => {
         setStatus((previous) =>
           result
             ? {
@@ -122,11 +158,19 @@ export function SyncProvider({ children }: { children: ReactNode }) {
                 lastSyncAt: Date.now(),
                 error: null,
                 conflicts: previous.conflicts + result.conflicts,
+                usage: blobs?.usage ?? previous.usage,
+                overQuota: blobs ? blobs.overQuota : previous.overQuota,
+                blobError,
               }
             : { ...previous, state: 'error', error },
         );
         // Des éléments ont changé localement : les listes doivent se recharger.
-        if (result && (result.pulled > 0 || result.conflicts > 0)) invalidate();
+        if (
+          result &&
+          (result.pulled > 0 || result.conflicts > 0 || (blobs?.downloaded ?? 0) > 0)
+        ) {
+          invalidate();
+        }
       },
     );
     runner.current = current;

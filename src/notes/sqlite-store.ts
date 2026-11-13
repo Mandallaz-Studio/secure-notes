@@ -1,8 +1,11 @@
 import * as SQLite from 'expo-sqlite';
 
 import { toHex } from '@/crypto/vectors';
+import { blobIdsOf } from '@/notes/blobs';
 import { foldText, previewOf, PREVIEW_LENGTH, searchTextOf } from '@/notes/model';
 import type {
+  Attachment,
+  BlobState,
   BodyFormat,
   Category,
   Note,
@@ -57,6 +60,21 @@ const MIGRATIONS: string[] = [
      key TEXT PRIMARY KEY NOT NULL,
      value TEXT NOT NULL
    );`,
+  // Version 3 : fichiers joints et images, stockés à part des notes (« blobs »).
+  `ALTER TABLE notes ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]';
+   CREATE TABLE blobs (
+     id TEXT PRIMARY KEY NOT NULL,
+     data BLOB NOT NULL,
+     size INTEGER NOT NULL,
+     uploaded INTEGER NOT NULL DEFAULT 0,
+     created_at INTEGER NOT NULL
+   );
+   CREATE TABLE note_blobs (
+     note_id TEXT NOT NULL,
+     blob_id TEXT NOT NULL,
+     PRIMARY KEY (note_id, blob_id)
+   );
+   CREATE INDEX note_blobs_by_blob ON note_blobs (blob_id);`,
 ];
 
 type NoteRow = {
@@ -70,6 +88,7 @@ type NoteRow = {
   created_at: number;
   updated_at: number;
   deleted_at: number | null;
+  attachments: string;
 };
 
 type SummaryRow = Pick<
@@ -82,8 +101,17 @@ type CategoryRow = { id: string; name: string; created_at: number; updated_at: n
 type SyncColumns = { dirty: number; server_seq: number | null };
 
 const NOTE_COLUMNS = `id, title, body, body_format, plain_text, category_id, archived,
-                      created_at, updated_at, deleted_at`;
+                      created_at, updated_at, deleted_at, attachments`;
 const CATEGORY_COLUMNS = 'id, name, created_at, updated_at';
+
+function attachmentsOf(json: string): Attachment[] {
+  try {
+    const list: unknown = JSON.parse(json);
+    return Array.isArray(list) ? (list as Attachment[]) : [];
+  } catch {
+    return [];
+  }
+}
 
 function noteOfRow(row: NoteRow): Note {
   return {
@@ -97,6 +125,7 @@ function noteOfRow(row: NoteRow): Note {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at,
+    attachments: attachmentsOf(row.attachments),
   };
 }
 
@@ -222,15 +251,16 @@ export class SqliteNoteStore implements NoteStore {
     await this.db.runAsync(
       `INSERT INTO notes (id, title, body, body_format, plain_text, search_text,
                           category_id, archived, created_at, updated_at, deleted_at,
-                          dirty, server_seq)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                          attachments, dirty, server_seq)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                ${local ? '(SELECT server_seq FROM tombstones WHERE id = ?)' : '?'})
        ON CONFLICT (id) DO UPDATE SET
          title = excluded.title, body = excluded.body, body_format = excluded.body_format,
          plain_text = excluded.plain_text, search_text = excluded.search_text,
          category_id = excluded.category_id, archived = excluded.archived,
          created_at = excluded.created_at, updated_at = excluded.updated_at,
-         deleted_at = excluded.deleted_at, dirty = excluded.dirty
+         deleted_at = excluded.deleted_at, attachments = excluded.attachments,
+         dirty = excluded.dirty
          ${local ? '' : ', server_seq = excluded.server_seq'}`,
       [
         note.id,
@@ -244,11 +274,24 @@ export class SqliteNoteStore implements NoteStore {
         note.createdAt,
         note.updatedAt,
         note.deletedAt,
+        JSON.stringify(note.attachments),
         local ? 1 : 0,
         local ? note.id : remoteSeq,
       ],
     );
     await this.db.runAsync('DELETE FROM tombstones WHERE id = ?', [note.id]);
+    await this.db.runAsync('DELETE FROM note_blobs WHERE note_id = ?', [note.id]);
+    for (const blobId of blobIdsOf(note)) {
+      await this.db.runAsync('INSERT OR IGNORE INTO note_blobs (note_id, blob_id) VALUES (?, ?)', [
+        note.id,
+        blobId,
+      ]);
+    }
+  }
+
+  /** Oublie les références des notes qui n'existent plus. */
+  private async pruneBlobRefs(): Promise<void> {
+    await this.db.runAsync('DELETE FROM note_blobs WHERE note_id NOT IN (SELECT id FROM notes)');
   }
 
   private async writeCategory(category: Category, remoteSeq?: number): Promise<void> {
@@ -290,10 +333,12 @@ export class SqliteNoteStore implements NoteStore {
 
   async deleteNote(id: string): Promise<void> {
     await this.bury('notes', 'id = ?', [id]);
+    await this.pruneBlobRefs();
   }
 
   async emptyTrash(): Promise<void> {
     await this.bury('notes', 'deleted_at IS NOT NULL', []);
+    await this.pruneBlobRefs();
   }
 
   async listCategories(): Promise<Category[]> {
@@ -361,6 +406,7 @@ export class SqliteNoteStore implements NoteStore {
       await this.db.runAsync('DELETE FROM notes WHERE id = ?', [change.id]);
       await this.db.runAsync('DELETE FROM categories WHERE id = ?', [change.id]);
       await this.db.runAsync('DELETE FROM tombstones WHERE id = ?', [change.id]);
+      await this.pruneBlobRefs();
     }
   }
 
@@ -397,6 +443,73 @@ export class SqliteNoteStore implements NoteStore {
     }
   }
 
+  async putBlob(id: string, data: Uint8Array): Promise<void> {
+    await this.db.runAsync(
+      'INSERT OR IGNORE INTO blobs (id, data, size, uploaded, created_at) VALUES (?, ?, ?, 0, ?)',
+      [id, data, data.length, Date.now()],
+    );
+  }
+
+  async missingBlobs(ids: string[]): Promise<string[]> {
+    if (ids.length === 0) return [];
+    const rows = await this.db.getAllAsync<{ id: string }>(
+      `SELECT id FROM blobs WHERE id IN (${ids.map(() => '?').join(', ')})`,
+      ids,
+    );
+    const present = new Set(rows.map((row) => row.id));
+    return ids.filter((id) => !present.has(id));
+  }
+
+  async getBlob(id: string): Promise<Uint8Array | null> {
+    const row = await this.db.getFirstAsync<{ data: Uint8Array }>(
+      'SELECT data FROM blobs WHERE id = ?',
+      [id],
+    );
+    return row ? new Uint8Array(row.data) : null;
+  }
+
+  async listBlobs(): Promise<BlobState[]> {
+    const rows = await this.db.getAllAsync<{
+      id: string;
+      has_data: number;
+      uploaded: number;
+      size: number;
+      created_at: number;
+      referenced: number;
+    }>(
+      `SELECT id, 1 AS has_data, uploaded, size, created_at,
+              EXISTS (SELECT 1 FROM note_blobs WHERE blob_id = blobs.id) AS referenced
+         FROM blobs
+        UNION ALL
+       SELECT DISTINCT blob_id, 0, 0, 0, 0, 1
+         FROM note_blobs
+        WHERE blob_id NOT IN (SELECT id FROM blobs)`,
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      hasData: row.has_data === 1,
+      uploaded: row.uploaded === 1,
+      referenced: row.referenced === 1,
+      size: row.size,
+      createdAt: row.created_at,
+    }));
+  }
+
+  async storeRemoteBlob(id: string, data: Uint8Array): Promise<void> {
+    await this.db.runAsync(
+      'INSERT OR REPLACE INTO blobs (id, data, size, uploaded, created_at) VALUES (?, ?, ?, 1, ?)',
+      [id, data, data.length, Date.now()],
+    );
+  }
+
+  async setBlobUploaded(id: string, uploaded: boolean): Promise<void> {
+    await this.db.runAsync('UPDATE blobs SET uploaded = ? WHERE id = ?', [uploaded ? 1 : 0, id]);
+  }
+
+  async deleteBlob(id: string): Promise<void> {
+    await this.db.runAsync('DELETE FROM blobs WHERE id = ?', [id]);
+  }
+
   async getSyncValue(key: string): Promise<string | null> {
     const row = await this.db.getFirstAsync<{ value: string }>(
       'SELECT value FROM sync_state WHERE key = ?',
@@ -416,6 +529,7 @@ export class SqliteNoteStore implements NoteStore {
     await this.db.execAsync(
       `UPDATE notes SET dirty = 1, server_seq = NULL;
        UPDATE categories SET dirty = 1, server_seq = NULL;
+       UPDATE blobs SET uploaded = 0;
        DELETE FROM tombstones;
        DELETE FROM sync_state;`,
     );

@@ -1,5 +1,5 @@
 import { Link, useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { Button } from '@/components/button';
@@ -8,6 +8,7 @@ import { TextField } from '@/components/text-field';
 import { ThemedText } from '@/components/themed-text';
 import { NotePalette, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
+import { formatBytes, newImageCache, toStoredImages } from '@/notes/blobs';
 import { markdownFilesSupported, pickTextFile } from '@/notes/markdown-files';
 import { createNote, withBody, withTitle } from '@/notes/model';
 import { useNotes } from '@/notes/notes-context';
@@ -52,6 +53,8 @@ export default function SettingsScreen() {
       {markdownFilesSupported && <ImportSection />}
 
       <SyncSection />
+
+      <StorageSection />
 
       <VaultSection />
 
@@ -156,6 +159,8 @@ const styles = StyleSheet.create({
   wrap: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.three },
   flex: { flex: 1 },
   highlight: { paddingHorizontal: Spacing.two, borderRadius: 4 },
+  gauge: { height: 8, borderRadius: 4, overflow: 'hidden' },
+  gaugeFill: { height: 8, borderRadius: 4 },
 });
 
 function ImportSection() {
@@ -171,7 +176,9 @@ function ImportSection() {
       if (!picked) return;
       const { title, doc } = fileToNote(picked.name, picked.bytes);
       const now = Date.now();
-      const note = withBody(withTitle(createNote(now), title, now), contentOfDoc(doc), now);
+      // Les images du fichier deviennent des blobs, comme celles ajoutées dans l'éditeur.
+      const stored = await toStoredImages(doc, store, newImageCache());
+      const note = withBody(withTitle(createNote(now), title, now), contentOfDoc(stored), now);
       // Si le coffre s'est verrouillé pendant le choix du fichier, la note est
       // enregistrée au prochain déverrouillage et cet écran n'existe plus.
       if (await submitNote(note)) {
@@ -197,6 +204,76 @@ function ImportSection() {
       {error && (
         <ThemedText themeColor="danger" type="small">
           {error}
+        </ThemedText>
+      )}
+    </View>
+  );
+}
+
+/** Place occupée par les images et les fichiers joints. */
+function StorageSection() {
+  const theme = useTheme();
+  const { store, revision } = useNotes();
+  const { config, status } = useSync();
+  const [localBytes, setLocalBytes] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!store) return;
+    let cancelled = false;
+    store.listBlobs().then(
+      (blobs) => {
+        if (!cancelled) setLocalBytes(blobs.reduce((sum, blob) => sum + blob.size, 0));
+      },
+      () => {},
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [store, revision, status.lastSyncAt]);
+
+  const usage = config.enabled ? status.usage : null;
+  const ratio = usage && usage.quotaBytes > 0 ? Math.min(1, usage.usedBytes / usage.quotaBytes) : 0;
+
+  return (
+    <View style={styles.section}>
+      <ThemedText type="subtitle">Stockage</ThemedText>
+      <ThemedText themeColor="textSecondary" type="small">
+        Images et fichiers joints sur cet appareil :{' '}
+        {localBytes === null ? '…' : formatBytes(localBytes)}
+      </ThemedText>
+      {usage && (
+        <>
+          <View
+            accessibilityRole="progressbar"
+            accessibilityValue={{ min: 0, max: 100, now: Math.round(ratio * 100) }}
+            style={[styles.gauge, { backgroundColor: theme.backgroundElement }]}>
+            <View
+              style={[
+                styles.gaugeFill,
+                { width: `${ratio * 100}%`, backgroundColor: ratio > 0.9 ? theme.danger : theme.tint },
+              ]}
+            />
+          </View>
+          <ThemedText themeColor="textSecondary" type="small">
+            Sur le serveur : {formatBytes(usage.usedBytes)} utilisés sur{' '}
+            {formatBytes(usage.quotaBytes)}
+          </ThemedText>
+        </>
+      )}
+      {config.enabled && !usage && status.lastSyncAt !== null && !status.blobError && (
+        <ThemedText themeColor="textSecondary" type="small">
+          Espace utilisé sur le serveur : inconnu (instance pas à jour).
+        </ThemedText>
+      )}
+      {config.enabled && status.overQuota > 0 && (
+        <ThemedText themeColor="danger" type="small">
+          Quota atteint : {status.overQuota} image(s) ou fichier(s) restent sur cet appareil sans
+          être synchronisés. Supprimez des fichiers joints ou faites augmenter le quota du compte.
+        </ThemedText>
+      )}
+      {config.enabled && status.blobError && (
+        <ThemedText themeColor="danger" type="small">
+          Images et fichiers joints non synchronisés : {status.blobError}
         </ThemedText>
       )}
     </View>

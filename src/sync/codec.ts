@@ -7,7 +7,14 @@ import {
   utf8Decode,
   utf8Encode,
 } from '@/crypto/aead';
-import type { BodyFormat, Category, Note, RemoteChange, SyncItem } from '@/notes/types';
+import type {
+  Attachment,
+  BodyFormat,
+  Category,
+  Note,
+  RemoteChange,
+  SyncItem,
+} from '@/notes/types';
 
 /**
  * Forme chiffrée d'un élément envoyé au serveur.
@@ -45,6 +52,8 @@ type Payload =
       createdAt: number;
       updatedAt: number;
       deletedAt: number | null;
+      /** Absent des notes écrites avant les fichiers joints. */
+      attachments?: Attachment[];
     }
   | { v: number; t: 'category'; name: string; createdAt: number; updatedAt: number }
   | { v: number; t: 'deleted' };
@@ -87,6 +96,18 @@ const isText = (value: unknown): value is string => typeof value === 'string';
 const isTime = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value);
 
+const isAttachment = (value: unknown): value is Attachment => {
+  const item = value as Attachment | null;
+  return (
+    typeof item === 'object' &&
+    item !== null &&
+    isText(item.id) &&
+    isText(item.name) &&
+    isText(item.mime) &&
+    isTime(item.size)
+  );
+};
+
 /**
  * @throws si le blob a été altéré, n'appartient pas à cet identifiant ou à ce
  *   compte, ou vient d'une version plus récente de l'app.
@@ -116,6 +137,7 @@ export function openItem(id: string, sealed: SealedItem, wrapKey: Uint8Array): R
     return { kind: 'category', category };
   }
   const { title, body, bodyFormat, plainText, categoryId, archived, deletedAt } = payload;
+  const attachments = payload.attachments ?? [];
   if (
     payload.t === 'note' &&
     isText(title) &&
@@ -124,7 +146,9 @@ export function openItem(id: string, sealed: SealedItem, wrapKey: Uint8Array): R
     isText(plainText) &&
     (categoryId === null || isText(categoryId)) &&
     typeof archived === 'boolean' &&
-    (deletedAt === null || isTime(deletedAt))
+    (deletedAt === null || isTime(deletedAt)) &&
+    Array.isArray(attachments) &&
+    attachments.every(isAttachment)
   ) {
     const note: Note = {
       id,
@@ -137,6 +161,12 @@ export function openItem(id: string, sealed: SealedItem, wrapKey: Uint8Array): R
       createdAt,
       updatedAt,
       deletedAt,
+      attachments: attachments.map(({ id: blobId, name, mime, size }) => ({
+        id: blobId,
+        name,
+        mime,
+        size,
+      })),
     };
     return { kind: 'note', note };
   }

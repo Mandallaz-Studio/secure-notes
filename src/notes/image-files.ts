@@ -20,9 +20,9 @@ function remove(uri: string) {
 /**
  * Fait choisir une image et la prépare pour une note : réduite à 1600 pixels
  * de côté au plus, recompressée en JPEG (ce qui retire aussi ses métadonnées :
- * lieu, appareil, date) et renvoyée sous forme d'adresse `data:`. L'image vit
- * ensuite dans le document de la note : elle est chiffrée et synchronisée avec
- * lui. `null` si l'utilisateur annule.
+ * lieu, appareil, date) et renvoyée sous forme d'adresse `data:`. L'éditeur
+ * l'affiche ainsi ; à l'enregistrement elle devient un blob chiffré, stocké et
+ * synchronisé à part (voir `blobs.ts`). `null` si l'utilisateur annule.
  */
 export async function pickImage(): Promise<string | null> {
   const result = await DocumentPicker.getDocumentAsync({

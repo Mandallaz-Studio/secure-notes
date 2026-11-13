@@ -1,5 +1,11 @@
 import { fromBase64, keyedHash, toBase64 } from '@/crypto/aead';
 import type { VaultKeys } from '@/crypto/keys';
+import {
+  QuotaExceededError,
+  type BlobRemote,
+  type RemoteAttachment,
+  type StorageUsage,
+} from '@/sync/blobs';
 import type { RemoteRow, SyncRemote } from '@/sync/engine';
 
 /**
@@ -67,7 +73,7 @@ type Json = Record<string, unknown>;
 
 type Reply = { status: number; body: unknown };
 
-export class SupabaseRemote implements SyncRemote {
+export class SupabaseRemote implements SyncRemote, BlobRemote {
   readonly instanceId: string;
   private session: { token: string; expiresAt: number } | null = null;
 
@@ -176,7 +182,7 @@ export class SupabaseRemote implements SyncRemote {
   private static fail(reply: Reply): never {
     if (reply.status === 404) {
       throw new SyncError(
-        "L'instance n'est pas préparée pour Secure Notes (table « items » absente) : appliquez les migrations du dossier supabase/migrations.",
+        "L'instance n'est pas à jour pour Secure Notes (table absente) : appliquez les migrations du dossier supabase/migrations.",
       );
     }
     throw new SyncError(`Le serveur a refusé la requête (${SupabaseRemote.describe(reply)}).`);
@@ -229,5 +235,88 @@ export class SupabaseRemote implements SyncRemote {
     if (reply.status !== 200 || !Array.isArray(reply.body)) SupabaseRemote.fail(reply);
     // Aucune ligne touchée : la version du serveur n'est plus celle attendue.
     return SupabaseRemote.seqOf(reply);
+  }
+
+  // --- Fichiers joints et images -------------------------------------------
+
+  async listAttachmentIds(): Promise<string[]> {
+    const ids: string[] = [];
+    const page = 1000;
+    for (;;) {
+      const reply = await this.rest(
+        'GET',
+        `/attachments?select=id&order=id.asc&limit=${page}&offset=${ids.length}`,
+      );
+      if (reply.status !== 200 || !Array.isArray(reply.body)) SupabaseRemote.fail(reply);
+      const rows = reply.body as Json[];
+      for (const row of rows) if (typeof row.id === 'string') ids.push(row.id);
+      if (rows.length < page) return ids;
+    }
+  }
+
+  async getAttachment(id: string): Promise<RemoteAttachment | null> {
+    const reply = await this.rest('GET', `/attachments?id=eq.${id}&select=wrapped_key,chunk_count`);
+    if (reply.status !== 200 || !Array.isArray(reply.body)) SupabaseRemote.fail(reply);
+    const row = reply.body[0] as Json | undefined;
+    if (!row) return null;
+    if (typeof row.wrapped_key !== 'string' || typeof row.chunk_count !== 'number') {
+      throw new SyncError('Réponse du serveur inattendue.');
+    }
+    return { wrappedKey: row.wrapped_key, chunkCount: row.chunk_count };
+  }
+
+  async createAttachment(id: string, attachment: RemoteAttachment): Promise<boolean> {
+    const reply = await this.rest('POST', '/attachments', {
+      id,
+      wrapped_key: attachment.wrappedKey,
+      chunk_count: attachment.chunkCount,
+    });
+    if (reply.status === 409) return false;
+    if (reply.status !== 201) SupabaseRemote.fail(reply);
+    return true;
+  }
+
+  async putChunk(id: string, index: number, data: string): Promise<void> {
+    const reply = await this.rest('POST', '/attachment_chunks', {
+      attachment_id: id,
+      idx: index,
+      data,
+    });
+    if (reply.status === 201) return;
+    const body = (reply.body ?? {}) as Json;
+    // Bloc déjà envoyé lors d'une tentative précédente.
+    if (reply.status === 409 && body.code === '23505') return;
+    if (typeof body.message === 'string' && body.message.includes('storage_quota_exceeded')) {
+      throw new QuotaExceededError('Quota de stockage atteint');
+    }
+    SupabaseRemote.fail(reply);
+  }
+
+  async getChunk(id: string, index: number): Promise<string | null> {
+    const reply = await this.rest(
+      'GET',
+      `/attachment_chunks?attachment_id=eq.${id}&idx=eq.${index}&select=data`,
+    );
+    if (reply.status !== 200 || !Array.isArray(reply.body)) SupabaseRemote.fail(reply);
+    const row = reply.body[0] as Json | undefined;
+    return typeof row?.data === 'string' ? row.data : null;
+  }
+
+  async deleteAttachment(id: string): Promise<void> {
+    const reply = await this.rest('DELETE', `/attachments?id=eq.${id}`);
+    if (reply.status !== 204 && reply.status !== 200) SupabaseRemote.fail(reply);
+  }
+
+  async getUsage(): Promise<StorageUsage | null> {
+    const reply = await this.rest('GET', '/profiles?select=storage_quota_bytes,storage_used_bytes');
+    const row = Array.isArray(reply.body) ? (reply.body[0] as Json | undefined) : undefined;
+    if (
+      reply.status !== 200 ||
+      typeof row?.storage_quota_bytes !== 'number' ||
+      typeof row.storage_used_bytes !== 'number'
+    ) {
+      return null;
+    }
+    return { usedBytes: row.storage_used_bytes, quotaBytes: row.storage_quota_bytes };
   }
 }
