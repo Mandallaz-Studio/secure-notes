@@ -2,7 +2,7 @@ import { Image } from 'expo-image';
 import { useState, type ReactNode } from 'react';
 import { Linking, StyleSheet, Text, View, type TextStyle } from 'react-native';
 
-import { Fonts, Spacing } from '@/constants/theme';
+import { fontFamily, Radius, Spacing, Type } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { toDisplayDoc, type RichMark, type RichNode } from '@/notes/rich-text';
 import { useThemePreference } from '@/theme/theme-preference';
@@ -22,9 +22,9 @@ const DATA_IMAGE = /^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/=]+$/i;
 const WEB_LINK = /^https?:\/\//i;
 
 const HEADING_SIZES: Record<number, TextStyle> = {
-  1: { fontSize: 26, lineHeight: 34, fontWeight: 700 },
-  2: { fontSize: 22, lineHeight: 30, fontWeight: 700 },
-  3: { fontSize: 18, lineHeight: 26, fontWeight: 600 },
+  1: { fontFamily: fontFamily(600), fontSize: 24, lineHeight: 30, letterSpacing: -0.2 },
+  2: { fontFamily: fontFamily(600), fontSize: 20, lineHeight: 26 },
+  3: { fontFamily: fontFamily(600), fontSize: 17, lineHeight: 24 },
 };
 
 function SharedImage({ uri }: { uri: string }) {
@@ -53,29 +53,35 @@ export function RichView({ doc }: { doc: RichNode }) {
   const theme = useTheme();
   const { scheme } = useThemePreference();
   const shown = toDisplayDoc(doc, scheme);
-  const base: TextStyle = { color: theme.text, fontSize: 16, lineHeight: 24 };
+  const base: TextStyle = { ...Type.body, color: theme.ink };
 
   const markStyle = (marks: RichMark[] | undefined): TextStyle => {
     const style: Mutable<TextStyle> = {};
     const lines: string[] = [];
+    let bold = false;
+    let italic = false;
+    let code = false;
     for (const mark of marks ?? []) {
       const color = mark.attrs?.color;
-      if (mark.type === 'bold') style.fontWeight = 700;
-      else if (mark.type === 'italic') style.fontStyle = 'italic';
+      if (mark.type === 'bold') bold = true;
+      else if (mark.type === 'italic') italic = true;
       else if (mark.type === 'underline') lines.push('underline');
       else if (mark.type === 'strike') lines.push('line-through');
       else if (mark.type === 'code') {
-        style.fontFamily = Fonts?.mono;
-        style.backgroundColor = theme.backgroundElement;
+        code = true;
+        style.backgroundColor = theme.surfaceSunken;
       } else if (mark.type === 'textStyle' && typeof color === 'string' && color !== 'inherit') {
         style.color = color;
       } else if (mark.type === 'highlight') {
         style.backgroundColor = typeof color === 'string' && color !== 'inherit' ? color : '#FFF3A3';
       } else if (mark.type === 'link') {
-        style.color = theme.tint;
+        style.color = theme.accent;
         lines.push('underline');
       }
     }
+    // Android ne synthétise pas les graisses : une famille par graisse.
+    if (code) style.fontFamily = fontFamily(400, false, true);
+    else if (bold || italic) style.fontFamily = fontFamily(bold ? 600 : 400, italic);
     if (lines.length > 0) {
       style.textDecorationLine = [...new Set(lines)].join(' ') as TextStyle['textDecorationLine'];
     }
@@ -133,7 +139,7 @@ export function RichView({ doc }: { doc: RichNode }) {
   const listItems = (node: RichNode, bullet: (index: number, item: RichNode) => string) =>
     (node.content ?? []).map((item, index) => (
       <View key={index} style={styles.item}>
-        <Text style={[base, styles.bullet, { color: theme.textSecondary }]}>
+        <Text style={[base, styles.bullet, { color: theme.inkMuted }]}>
           {bullet(index, item)}
         </Text>
         <View style={styles.itemBody}>{(item.content ?? []).map(block)}</View>
@@ -150,12 +156,10 @@ export function RichView({ doc }: { doc: RichNode }) {
       }
       case 'codeBlock':
         return textBlock(node, key, {
-          fontFamily: Fonts?.mono,
-          fontSize: 14,
-          lineHeight: 20,
-          backgroundColor: theme.backgroundElement,
+          ...Type.code,
+          backgroundColor: theme.surfaceSunken,
           padding: Spacing.two,
-          borderRadius: 6,
+          borderRadius: Radius.sm,
         });
       case 'bulletList':
         return (
@@ -179,7 +183,7 @@ export function RichView({ doc }: { doc: RichNode }) {
         );
       case 'blockquote':
         return (
-          <View key={key} style={[styles.quote, { borderColor: theme.border }]}>
+          <View key={key} style={[styles.quote, { borderColor: theme.borderStrong }]}>
             {(node.content ?? []).map(block)}
           </View>
         );
@@ -210,7 +214,7 @@ const styles = StyleSheet.create({
   item: { flexDirection: 'row', gap: Spacing.two },
   bullet: { minWidth: 20, textAlign: 'right' },
   itemBody: { flex: 1, gap: Spacing.one },
-  quote: { borderLeftWidth: 3, paddingLeft: Spacing.three, gap: Spacing.one },
+  quote: { borderLeftWidth: 2, paddingLeft: Spacing.three, gap: Spacing.one },
   image: { width: '100%', borderRadius: 8 },
   rule: { height: StyleSheet.hairlineWidth, marginVertical: Spacing.two },
 });

@@ -689,6 +689,30 @@ Limites connues :
 - Vérifié : sur émulateur (build de débogage, lien forcé vers l'app), le lien ouvre la
   note partagée dans l'app.
 
+### Refonte visuelle (2026-11-14)
+
+Référence : le design system « Secure Notes » (claude.ai), qui documente jetons,
+composants et écrans.
+
+- Couleurs dans `src/constants/theme.ts`, noms du design system en camelCase : `text` →
+  `ink`, `textSecondary` → `inkMuted`, `background` → `surface` (et `canvas` pour les
+  écrans de liste), `backgroundElement` → `surfaceSunken`, `backgroundSelected` →
+  `surfaceSelected`, `tint` → `accent`. `NotePalette` inchangée.
+- Polices IBM Plex Sans et Mono (`@expo-google-fonts/*`), chargées dans `_layout.tsx`.
+  Une famille par graisse (`fontFamily()` dans `theme.ts`) : ne pas utiliser
+  `fontWeight` avec elles, Android ne synthétise pas les graisses. Styles de texte :
+  `Type` (`display`, `title`, `headline`, `section`, `body`, `callout`, `caption`…).
+- Éditeur : polices embarquées en base64 dans la WebView (`constants/editor-fonts.ts`,
+  aucune requête réseau).
+- Icônes Lucide (`lucide-react-native`, trait 1,75) via `components/icon.tsx` ; ajoute
+  la dépendance native `react-native-svg` : **refaire un dev build**.
+- Nouveaux composants : `IconButton`, `SegmentedControl`, `SearchField`, `Notice`,
+  `ListGroup`/`ListRow`, `ProgressBar`, `EmptyState`, `Fab`, `NoteRow`, `SyncStatus`,
+  `Logo`, `CategoryTag`.
+- Éditeur de note : Archiver / Corbeille passent de la barre du bas aux icônes de
+  l'en-tête ; couleurs et surlignage s'ouvrent dans une rangée au-dessus de la barre.
+- Nouveau logo et icônes d'app (`assets/images/`), `assets/expo.icon` supprimé.
+
 ## 5. Points d'attention
 
 - **Dev build obligatoire** dès la phase 0 : libsodium natif et SQLCipher ne

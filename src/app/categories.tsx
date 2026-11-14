@@ -1,12 +1,18 @@
 import { useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { StyleSheet, TextInput, View } from 'react-native';
+
+import { Plus, Tag, Trash2 } from 'lucide-react-native';
 
 import { Button } from '@/components/button';
 import { confirmDestructive } from '@/components/confirm';
+import { EmptyState } from '@/components/empty-state';
+import { IconButton } from '@/components/icon-button';
+import { ListGroup, ListItem } from '@/components/list-group';
 import { Screen } from '@/components/screen';
 import { TextField } from '@/components/text-field';
-import { ThemedText } from '@/components/themed-text';
-import { Spacing } from '@/constants/theme';
+import { Icon } from '@/components/icon';
+import { Sizes, Spacing, Type } from '@/constants/theme';
+import { useTheme } from '@/hooks/use-theme';
 import { createCategory, foldText, renamed } from '@/notes/model';
 import { useCategories, useNotes } from '@/notes/notes-context';
 import type { Category } from '@/notes/types';
@@ -51,48 +57,49 @@ export default function CategoriesScreen() {
 
   return (
     <Screen>
-      <View style={styles.block}>
-        <ThemedText type="subtitle">Nouvelle catégorie</ThemedText>
-        <View style={styles.row}>
-          <View style={styles.flex}>
-            <TextField
-              accessibilityLabel="Nom de la nouvelle catégorie"
-              placeholder="Nom"
-              value={newName}
-              invalid={nameTaken(newName)}
-              onChangeText={setNewName}
-              onSubmitEditing={add}
-              returnKeyType="done"
+      <ListGroup title="Nouvelle catégorie">
+        <ListItem>
+          <View style={styles.row}>
+            <View style={styles.flex}>
+              <TextField
+                accessibilityLabel="Nom de la nouvelle catégorie"
+                placeholder="Ex. Clients"
+                value={newName}
+                error={nameTaken(newName) ? 'Cette catégorie existe déjà.' : undefined}
+                onChangeText={setNewName}
+                onSubmitEditing={add}
+                returnKeyType="done"
+              />
+            </View>
+            <Button
+              label="Ajouter"
+              icon={Plus}
+              variant="primary"
+              disabled={newName.trim() === '' || nameTaken(newName)}
+              onPress={add}
             />
           </View>
-          <Button
-            label="Ajouter"
-            variant="primary"
-            disabled={newName.trim() === '' || nameTaken(newName)}
-            onPress={add}
-          />
-        </View>
-        {nameTaken(newName) && (
-          <ThemedText type="small" themeColor="danger">
-            Cette catégorie existe déjà.
-          </ThemedText>
-        )}
-      </View>
+        </ListItem>
+      </ListGroup>
 
-      <View style={styles.block}>
-        <ThemedText type="subtitle">Catégories</ThemedText>
-        {categories.length === 0 && (
-          <ThemedText themeColor="textSecondary">Aucune catégorie pour l&apos;instant.</ThemedText>
-        )}
-        {categories.map((category) => (
-          <CategoryRow
-            key={category.id}
-            category={category}
-            onRename={(name) => rename(category, name)}
-            onRemove={() => remove(category)}
-          />
-        ))}
-      </View>
+      {categories.length === 0 ? (
+        <EmptyState
+          icon={Tag}
+          title="Aucune catégorie"
+          message="Les catégories rangent vos notes et servent de filtre dans la liste."
+        />
+      ) : (
+        <ListGroup title="Catégories" footer="Touchez un nom pour le modifier.">
+          {categories.map((category) => (
+            <CategoryRow
+              key={category.id}
+              category={category}
+              onRename={(name) => rename(category, name)}
+              onRemove={() => remove(category)}
+            />
+          ))}
+        </ListGroup>
+      )}
     </Screen>
   );
 }
@@ -106,22 +113,25 @@ type CategoryRowProps = {
 function CategoryRow({ category, onRename, onRemove }: CategoryRowProps) {
   const [name, setName] = useState(category.name);
 
+  const theme = useTheme();
+
   return (
-    <View style={styles.row}>
-      <View style={styles.flex}>
-        <TextField
-          accessibilityLabel={`Nom de la catégorie ${category.name}`}
-          value={name}
-          onChangeText={setName}
-          onEndEditing={() => onRename(name)}
-          onSubmitEditing={() => onRename(name)}
-          returnKeyType="done"
-        />
-      </View>
-      <Button
-        label="Supprimer"
-        accessibilityLabel={`Supprimer la catégorie ${category.name}`}
-        variant="danger"
+    <View style={styles.categoryRow}>
+      <Icon icon={Tag} color="inkMuted" />
+      <TextInput
+        accessibilityLabel={`Nom de la catégorie ${category.name}`}
+        value={name}
+        onChangeText={setName}
+        onEndEditing={() => onRename(name)}
+        onSubmitEditing={() => onRename(name)}
+        returnKeyType="done"
+        selectionColor={theme.accent}
+        style={[styles.flex, styles.nameInput, Type.body, { color: theme.ink }]}
+      />
+      <IconButton
+        icon={Trash2}
+        label={`Supprimer la catégorie ${category.name}`}
+        tone="danger"
         onPress={onRemove}
       />
     </View>
@@ -129,7 +139,15 @@ function CategoryRow({ category, onRename, onRemove }: CategoryRowProps) {
 }
 
 const styles = StyleSheet.create({
-  block: { gap: Spacing.two },
-  row: { flexDirection: 'row', gap: Spacing.two, alignItems: 'center' },
+  row: { flexDirection: 'row', gap: Spacing.two, alignItems: 'flex-start' },
+  categoryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingLeft: Spacing.three,
+    paddingRight: Spacing.two,
+    minHeight: Sizes.control + Spacing.two,
+  },
+  nameInput: { paddingVertical: Spacing.two },
   flex: { flex: 1 },
 });

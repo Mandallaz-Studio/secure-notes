@@ -5,6 +5,7 @@ import { StyleSheet, View } from 'react-native';
 import { Button } from '@/components/button';
 import { confirmDestructive } from '@/components/confirm';
 import { NewPhraseFlow } from '@/components/new-phrase';
+import { Notice } from '@/components/notice';
 import { RetirementNotice } from '@/components/retirement-notice';
 import { Screen } from '@/components/screen';
 import { ThemedText } from '@/components/themed-text';
@@ -59,15 +60,16 @@ export default function RecreateVaultScreen() {
         }}
         intro={
           <View style={styles.block}>
-            <ThemedText type="title">Votre nouvelle phrase</ThemedText>
+            <ThemedText type="title" accessibilityRole="header">
+              Votre nouvelle phrase
+            </ThemedText>
             <ThemedText>
               L&apos;app va afficher 24 nouveaux mots. Ils remplacent l&apos;ancienne phrase, qui ne
               permettra plus de retrouver vos notes.
             </ThemedText>
-            <ThemedText themeColor="danger">
-              Ils ne seront affichés qu&apos;une seule fois. Notez-les sur papier, dans l&apos;ordre,
-              et gardez-les en lieu sûr.
-            </ThemedText>
+            <Notice tone="warning" title="Affichés une seule fois">
+              Notez-les sur papier, dans l&apos;ordre, et gardez-les en lieu sûr.
+            </Notice>
           </View>
         }
       />
@@ -76,23 +78,23 @@ export default function RecreateVaultScreen() {
 
   if (step === 'done' && report) {
     return (
-      <Screen>
+      <Screen footer={<Button label="Terminé" variant="primary" onPress={() => router.back()} />}>
         <View style={styles.block}>
-          <ThemedText type="title">Nouveau coffre actif</ThemedText>
+          <ThemedText type="title" accessibilityRole="header">
+            Nouveau coffre actif
+          </ThemedText>
           <ThemedText>
             {report.notes} note(s), {report.categories} catégorie(s) et {report.blobs} image(s) ou
             fichier(s) recopiés dans le nouveau coffre. L&apos;ancienne base de cet appareil est
             effacée.
           </ThemedText>
           {config.enabled && (
-            <ThemedText themeColor="textSecondary">
-              Sur vos autres appareils, supprimez le coffre puis restaurez-le avec la nouvelle
-              phrase.
-            </ThemedText>
+            <Notice tone="info" title="Vos autres appareils">
+              Supprimez-y le coffre, puis restaurez-le avec la nouvelle phrase.
+            </Notice>
           )}
         </View>
         <RetirementNotice />
-        <Button label="Terminé" variant="primary" onPress={() => router.back()} />
       </Screen>
     );
   }
@@ -109,9 +111,11 @@ export default function RecreateVaultScreen() {
   };
 
   return (
-    <Screen>
+    <Screen footer={<Button label="Continuer" variant="danger" disabled={blocked} onPress={start} />}>
       <View style={styles.block}>
-        <ThemedText type="title">Recréer le coffre</ThemedText>
+        <ThemedText type="title" accessibilityRole="header">
+          Recréer le coffre
+        </ThemedText>
         <ThemedText>
           Si vous avez perdu votre phrase de récupération, ou si quelqu&apos;un a pu la voir : l&apos;app
           crée une nouvelle phrase et un nouveau coffre, y recopie toutes vos notes, catégories,
@@ -123,38 +127,37 @@ export default function RecreateVaultScreen() {
               Vos notes sont envoyées au nouveau compte ; une fois tout reçu, l&apos;ancien compte est
               vidé et fermé. Vos liens de partage continuent de fonctionner.
             </ThemedText>
-            <ThemedText themeColor="danger">
-              Vos autres appareils cesseront de se synchroniser : il faudra y restaurer le coffre
-              avec la nouvelle phrase. Ce qu&apos;ils n&apos;ont pas encore envoyé sera perdu.
-            </ThemedText>
+            <Notice tone="warning" title="Vos autres appareils cesseront de se synchroniser">
+              Il faudra y restaurer le coffre avec la nouvelle phrase. Ce qu&apos;ils n&apos;ont pas
+              encore envoyé sera perdu.
+            </Notice>
           </>
         ) : (
-          <ThemedText themeColor="textSecondary">
+          <ThemedText themeColor="inkMuted">
             La synchronisation est désactivée : rien n&apos;est envoyé ni supprimé sur un serveur.
           </ThemedText>
         )}
-        <ThemedText themeColor="textSecondary">
-          Conseillé avant de commencer : Réglages → Export → « Exporter toutes les notes ».
-        </ThemedText>
+        <Notice tone="info" title="Conseillé avant de commencer">
+          Réglages → Export → « Exporter toutes les notes ».
+        </Notice>
       </View>
       {unfinished && <RetirementNotice />}
       {missing !== null && missing > 0 && (
-        <ThemedText themeColor="danger">
-          {missing} image(s) ou fichier(s) joint(s) ne sont pas encore sur cet appareil. Attendez la
-          fin de la synchronisation : ils seraient perdus.
-        </ThemedText>
+        <Notice tone="danger" title="Fichiers pas encore sur cet appareil">
+          {missing} image(s) ou fichier(s) joint(s) manquent. Attendez la fin de la synchronisation :
+          ils seraient perdus.
+        </Notice>
       )}
       {pendingSync && !blocked && (
-        <ThemedText themeColor="textSecondary" type="small">
+        <ThemedText themeColor="inkMuted" type="callout">
           Synchronisation en cours : les dernières modifications des autres appareils arriveront
           peut-être après la copie.
         </ThemedText>
       )}
-      <Button label="Continuer" variant="danger" disabled={blocked} onPress={start} />
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  block: { gap: Spacing.two },
+  block: { gap: Spacing.three },
 });

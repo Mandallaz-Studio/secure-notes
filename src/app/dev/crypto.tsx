@@ -79,16 +79,16 @@ export default function CryptoSpikeScreen() {
 
   return (
     <ScrollView
-      style={{ backgroundColor: theme.background }}
+      style={{ backgroundColor: theme.surface }}
       contentContainerStyle={styles.content}
       contentInsetAdjustmentBehavior="automatic">
-      <ThemedText themeColor="textSecondary" type="small">
+      <ThemedText themeColor="inkMuted" type="callout">
         XChaCha20-Poly1305 avec une sous-clé dérivée, via libsodium.
       </ThemedText>
       <Button label="Lancer l'essai" onPress={async () => setResult(await runSpike())} />
       {result && (
         <>
-          <ThemedText type="subtitle" themeColor={result.ok ? 'success' : 'danger'}>
+          <ThemedText type="headline" themeColor={result.ok ? 'success' : 'danger'}>
             {result.ok ? 'Réussi' : 'Échec'}
           </ThemedText>
           {result.lines.map((line) => (

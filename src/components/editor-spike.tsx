@@ -42,14 +42,14 @@ export function EditorSpike() {
   useEffect(() => {
     editor.injectCSS(
       // Sur `body` seulement : une règle `*` écraserait les couleurs posées sur le texte.
-      `body { background-color: ${colors.background}; color: ${colors.text}; }
+      `body { background-color: ${colors.surface}; color: ${colors.ink}; }
        mark { color: inherit; }`,
       'app-theme',
     );
-  }, [editor, colors.background, colors.text]);
+  }, [editor, colors.surface, colors.ink]);
 
   return (
-    <EditorKeyboardAvoidingView style={[styles.flex, { backgroundColor: colors.background }]}>
+    <EditorKeyboardAvoidingView style={[styles.flex, { backgroundColor: colors.surface }]}>
       <View style={styles.actions}>
         <Button label="Rouge" onPress={() => editor.setColor(palette.text.red)} />
         <Button label="Bleu" onPress={() => editor.setColor(palette.text.blue)} />

@@ -1,8 +1,20 @@
+import {
+  IBMPlexMono_400Regular,
+  IBMPlexMono_500Medium,
+} from '@expo-google-fonts/ibm-plex-mono';
+import {
+  IBMPlexSans_400Regular,
+  IBMPlexSans_400Regular_Italic,
+  IBMPlexSans_500Medium,
+  IBMPlexSans_600SemiBold,
+  IBMPlexSans_600SemiBold_Italic,
+} from '@expo-google-fonts/ibm-plex-sans';
+import { useFonts } from 'expo-font';
 import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { Platform } from 'react-native';
 
-import { Colors } from '@/constants/theme';
+import { Colors, FontFiles, Type } from '@/constants/theme';
 import { NotesProvider } from '@/notes/notes-context';
 import { SyncProvider } from '@/sync/sync-context';
 import { ThemePreferenceProvider, useThemePreference } from '@/theme/theme-preference';
@@ -31,6 +43,16 @@ export default function RootLayout() {
 function Navigation() {
   const { scheme } = useThemePreference();
   const { status } = useVault();
+  // En cas d'échec de chargement, l'app s'affiche avec les polices du système.
+  const [fontsLoaded, fontError] = useFonts({
+    [FontFiles.sans400]: IBMPlexSans_400Regular,
+    [FontFiles.sans400Italic]: IBMPlexSans_400Regular_Italic,
+    [FontFiles.sans500]: IBMPlexSans_500Medium,
+    [FontFiles.sans600]: IBMPlexSans_600SemiBold,
+    [FontFiles.sans600Italic]: IBMPlexSans_600SemiBold_Italic,
+    [FontFiles.mono400]: IBMPlexMono_400Regular,
+    [FontFiles.mono500]: IBMPlexMono_500Medium,
+  });
   const colors = Colors[scheme];
   const base = scheme === 'dark' ? DarkTheme : DefaultTheme;
 
@@ -40,21 +62,30 @@ function Navigation() {
         ...base,
         colors: {
           ...base.colors,
-          primary: colors.tint,
-          background: colors.background,
-          card: colors.background,
-          text: colors.text,
+          primary: colors.accent,
+          background: colors.canvas,
+          card: colors.canvas,
+          text: colors.ink,
           border: colors.border,
+          notification: colors.danger,
         },
       }}>
       <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
       {/* Tant que l'état du coffre est inconnu, rien n'est affiché. */}
-      {status !== 'loading' && (
+      {status !== 'loading' && (fontsLoaded || fontError) && (
         <Stack
-          screenOptions={{ headerShadowVisible: false, headerBackButtonDisplayMode: 'minimal' }}>
+          screenOptions={{
+            headerShadowVisible: false,
+            headerBackButtonDisplayMode: 'minimal',
+            headerTintColor: colors.accent,
+            headerStyle: { backgroundColor: colors.canvas },
+            headerTitleStyle: { ...Type.headline, color: colors.ink },
+            headerLargeTitleStyle: { ...Type.display, color: colors.ink },
+            contentStyle: { backgroundColor: colors.canvas },
+          }}>
           {/* Les écrans de l'app n'existent que coffre déverrouillé. */}
           <Stack.Protected guard={!READER_ONLY && status === 'unlocked'}>
-            <Stack.Screen name="index" options={{ title: 'Notes' }} />
+            <Stack.Screen name="index" options={{ title: 'Notes', headerShown: false }} />
             <Stack.Screen name="note/[id]" options={{ title: '' }} />
             <Stack.Screen name="categories" options={{ title: 'Catégories' }} />
             <Stack.Screen name="settings" options={{ title: 'Réglages' }} />

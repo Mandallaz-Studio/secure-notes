@@ -9,16 +9,28 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import {
+  Archive,
+  ArchiveRestore,
+  Download,
+  FileText,
+  Image as ImageIcon,
+  Paperclip,
+  Settings2,
+  Share2,
+  Trash2,
+  X,
+} from 'lucide-react-native';
 
-import { Button } from '@/components/button';
 import { Chip } from '@/components/chip';
 import { confirmDestructive } from '@/components/confirm';
+import { Icon } from '@/components/icon';
+import { IconButton } from '@/components/icon-button';
 import { NoteBody } from '@/components/note-body';
 import type { NoteBodyHandle } from '@/components/note-body.types';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { MaxContentWidth, Spacing } from '@/constants/theme';
+import { MaxContentWidth, Radius, Sizes, Spacing, Type } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import {
   createNote,
@@ -76,7 +88,7 @@ export default function NoteScreen() {
     return (
       <ThemedView style={styles.centered}>
         <Stack.Screen options={{ title: '' }} />
-        <ThemedText themeColor="textSecondary">Cette note n&apos;existe plus.</ThemedText>
+        <ThemedText themeColor="inkMuted">Cette note n&apos;existe plus.</ThemedText>
       </ThemedView>
     );
   }
@@ -120,7 +132,6 @@ type NoteEditorProps = {
 function NoteEditor({ initial, isNew, store, revision, onChanged, onReplaced }: NoteEditorProps) {
   const theme = useTheme();
   const router = useRouter();
-  const insets = useSafeAreaInsets();
   const headerHeight = useHeaderHeight();
   const categories = useCategories();
   const [note, setNote] = useState(initial);
@@ -299,34 +310,60 @@ function NoteEditor({ initial, isNew, store, revision, onChanged, onReplaced }: 
     );
   };
 
+  const blank = isBlank(note);
+
   return (
-    <ThemedView style={styles.container}>
+    <ThemedView type="surface" style={styles.container}>
       <Stack.Screen
         options={{
           title: inTrash ? 'Corbeille' : note.archived ? 'Archive' : '',
-          headerRight:
-            markdownFilesSupported && !isBlank(note)
-              ? () => (
-                  <View style={styles.headerActions}>
-                    {!inTrash && (
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel="Partager par lien"
-                        hitSlop={8}
-                        onPress={() => void openSharing()}>
-                        <ThemedText style={{ color: theme.tint }}>Partager</ThemedText>
-                      </Pressable>
-                    )}
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel="Exporter en Markdown"
-                      hitSlop={8}
-                      onPress={exportMarkdown}>
-                      <ThemedText style={{ color: theme.tint }}>Exporter</ThemedText>
-                    </Pressable>
-                  </View>
-                )
-              : undefined,
+          headerStyle: { backgroundColor: theme.surface },
+          headerRight: blank
+            ? undefined
+            : () => (
+                <View style={styles.headerActions}>
+                  {inTrash ? (
+                    <>
+                      <IconButton
+                        icon={ArchiveRestore}
+                        label="Restaurer"
+                        onPress={() => void leaveAfter(restored)}
+                      />
+                      <IconButton
+                        icon={Trash2}
+                        label="Supprimer définitivement"
+                        tone="danger"
+                        onPress={deleteForever}
+                      />
+                    </>
+                  ) : (
+                    <>
+                      {markdownFilesSupported && (
+                        <IconButton
+                          icon={Share2}
+                          label="Partager par lien"
+                          onPress={() => void openSharing()}
+                        />
+                      )}
+                      {markdownFilesSupported && (
+                        <IconButton icon={Download} label="Exporter en Markdown" onPress={exportMarkdown} />
+                      )}
+                      <IconButton
+                        icon={note.archived ? ArchiveRestore : Archive}
+                        label={note.archived ? 'Désarchiver' : 'Archiver'}
+                        onPress={() =>
+                          void leaveAfter((current, now) => withArchived(current, !current.archived, now))
+                        }
+                      />
+                      <IconButton
+                        icon={Trash2}
+                        label="Mettre à la corbeille"
+                        onPress={() => void leaveAfter(trashed)}
+                      />
+                    </>
+                  )}
+                </View>
+              ),
         }}
       />
       <KeyboardAvoidingView
@@ -338,11 +375,16 @@ function NoteEditor({ initial, isNew, store, revision, onChanged, onReplaced }: 
           <TextInput
             accessibilityLabel="Titre"
             placeholder="Titre"
-            placeholderTextColor={theme.textSecondary}
+            placeholderTextColor={theme.inkSubtle}
+            selectionColor={theme.accent}
             value={note.title}
             editable={!inTrash}
-            onChangeText={(title) => void update(withTitle(latest.current, title, Date.now()))}
-            style={[styles.title, { color: theme.text }]}
+            multiline
+            submitBehavior="blurAndSubmit"
+            onChangeText={(title) =>
+              void update(withTitle(latest.current, title.replace(/\n/g, ' '), Date.now()))
+            }
+            style={[styles.title, Type.title, { color: theme.ink }]}
           />
           {!inTrash && (
             <ScrollView
@@ -367,7 +409,12 @@ function NoteEditor({ initial, isNew, store, revision, onChanged, onReplaced }: 
                   />
                 ))}
                 <Link href="/categories" asChild>
-                  <Chip label="Gérer les catégories" />
+                  <Chip
+                    label="Gérer"
+                    accessibilityLabel="Gérer les catégories"
+                    icon={Settings2}
+                    variant="action"
+                  />
                 </Link>
               </View>
             </ScrollView>
@@ -382,13 +429,22 @@ function NoteEditor({ initial, isNew, store, revision, onChanged, onReplaced }: 
                 {note.attachments.map((attachment) => (
                   <View
                     key={attachment.id}
-                    style={[styles.attachment, { backgroundColor: theme.backgroundElement }]}>
+                    style={[styles.attachment, { backgroundColor: theme.surfaceSunken }]}>
                     <Pressable
                       accessibilityRole="button"
                       accessibilityLabel={`Ouvrir ${attachment.name}`}
-                      onPress={() => void openAttachment(attachment)}>
-                      <ThemedText type="small" numberOfLines={1} style={styles.attachmentName}>
-                        📎 {attachment.name} · {formatBytes(attachment.size)}
+                      onPress={() => void openAttachment(attachment)}
+                      style={styles.attachmentOpen}>
+                      <Icon
+                        icon={attachment.mime.startsWith('image/') ? ImageIcon : FileText}
+                        size={16}
+                        color="inkMuted"
+                      />
+                      <ThemedText type="callout" numberOfLines={1} style={styles.attachmentName}>
+                        {attachment.name}
+                      </ThemedText>
+                      <ThemedText type="caption" themeColor="inkSubtle">
+                        {formatBytes(attachment.size)}
                       </ThemedText>
                     </Pressable>
                     {!inTrash && (
@@ -396,15 +452,21 @@ function NoteEditor({ initial, isNew, store, revision, onChanged, onReplaced }: 
                         accessibilityRole="button"
                         accessibilityLabel={`Retirer ${attachment.name}`}
                         hitSlop={8}
-                        onPress={() => void removeAttachment(attachment)}>
-                        <ThemedText type="small" themeColor="textSecondary">
-                          ✕
-                        </ThemedText>
+                        onPress={() => void removeAttachment(attachment)}
+                        style={styles.attachmentRemove}>
+                        <Icon icon={X} size={14} color="inkMuted" />
                       </Pressable>
                     )}
                   </View>
                 ))}
-                {!inTrash && <Chip label="＋ Joindre un fichier" onPress={() => void attachFile()} />}
+                {!inTrash && (
+                  <Chip
+                    label="Joindre un fichier"
+                    icon={Paperclip}
+                    variant="action"
+                    onPress={() => void attachFile()}
+                  />
+                )}
               </View>
             </ScrollView>
           )}
@@ -419,46 +481,10 @@ function NoteEditor({ initial, isNew, store, revision, onChanged, onReplaced }: 
         />
 
         {saveError && (
-          <ThemedText themeColor="danger" style={styles.error}>
+          <ThemedText themeColor="danger" type="callout" style={styles.error}>
             {saveError}
           </ThemedText>
         )}
-        <View
-          style={[
-            styles.actions,
-            { borderColor: theme.border, paddingBottom: insets.bottom + Spacing.two },
-          ]}>
-          {inTrash ? (
-            <>
-              <View style={styles.flex}>
-                <Button label="Restaurer" onPress={() => void leaveAfter(restored)} />
-              </View>
-              <View style={styles.flex}>
-                <Button label="Supprimer" variant="danger" onPress={deleteForever} />
-              </View>
-            </>
-          ) : (
-            <>
-              <View style={styles.flex}>
-                <Button
-                  label={note.archived ? 'Désarchiver' : 'Archiver'}
-                  disabled={isBlank(note)}
-                  onPress={() =>
-                    void leaveAfter((current, now) => withArchived(current, !current.archived, now))
-                  }
-                />
-              </View>
-              <View style={styles.flex}>
-                <Button
-                  label="Corbeille"
-                  variant="danger"
-                  disabled={isBlank(note)}
-                  onPress={() => void leaveAfter(trashed)}
-                />
-              </View>
-            </>
-          )}
-        </View>
       </KeyboardAvoidingView>
     </ThemedView>
   );
@@ -468,28 +494,22 @@ const styles = StyleSheet.create({
   container: { flex: 1, alignItems: 'center' },
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: Spacing.four },
   inner: { flex: 1, width: '100%', maxWidth: MaxContentWidth },
-  header: { padding: Spacing.three, paddingBottom: Spacing.two, gap: Spacing.two },
-  headerActions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three },
-  title: { fontSize: 24, fontWeight: 700, paddingVertical: Spacing.one },
+  header: { paddingHorizontal: Spacing.three, paddingBottom: Spacing.two, gap: Spacing.two },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.half },
+  title: { paddingVertical: Spacing.one },
   // Sans cela, la rangée défilante s'étire en hauteur.
   chipScroll: { flexGrow: 0 },
   chips: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
   attachment: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.two,
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.one + Spacing.half,
-    borderRadius: 999,
+    height: Sizes.chip,
+    paddingLeft: 12,
+    paddingRight: Spacing.one,
+    borderRadius: Radius.full,
   },
-  attachmentName: { maxWidth: 220 },
+  attachmentOpen: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingRight: Spacing.one },
+  attachmentName: { maxWidth: 180 },
+  attachmentRemove: { padding: 5 },
   error: { paddingHorizontal: Spacing.three, paddingBottom: Spacing.two },
-  actions: {
-    flexDirection: 'row',
-    gap: Spacing.two,
-    paddingHorizontal: Spacing.three,
-    paddingTop: Spacing.two,
-    borderTopWidth: StyleSheet.hairlineWidth,
-  },
-  flex: { flex: 1 },
 });

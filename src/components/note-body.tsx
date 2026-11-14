@@ -6,13 +6,39 @@ import {
   useEditorBridge,
 } from '@10play/tentap-editor';
 import { useEffect, useImperativeHandle, useRef, useState } from 'react';
+import {
+  Baseline,
+  Bold,
+  Code,
+  Eraser,
+  Heading1,
+  Heading2,
+  Heading3,
+  Highlighter,
+  Image as ImageIcon,
+  Italic,
+  List,
+  ListChecks,
+  ListOrdered,
+  Redo2,
+  Strikethrough,
+  TextQuote,
+  Underline,
+  Undo2,
+  type LucideIcon,
+} from 'lucide-react-native';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import type { NoteBodyProps } from '@/components/note-body.types';
+import { Icon } from '@/components/icon';
+import { IconButton } from '@/components/icon-button';
 import { ThemedText } from '@/components/themed-text';
+import { EDITOR_FONT_FACES } from '@/constants/editor-fonts';
 import {
   Colors,
   NotePalette,
+  Radius,
+  Sizes,
   Spacing,
   type NoteHighlightColor,
   type NoteTextColor,
@@ -118,7 +144,7 @@ function Editor({ prepared, images, store, editable, onChange, ref }: EditorProp
     initialContent: initialDoc,
     editable,
     // Le type récursif attendu par TenTap dépasse la profondeur admise par TypeScript.
-    theme: { webview: { backgroundColor: colors.background } } as never,
+    theme: { webview: { backgroundColor: colors.surface } } as never,
     onChange: () => {
       cancelPendingRead();
       timer.current = setTimeout(async () => {
@@ -147,15 +173,26 @@ function Editor({ prepared, images, store, editable, onChange, ref }: EditorProp
   useEffect(() => {
     editor.injectCSS(
       // Sur `body` seulement : une règle `*` écraserait les couleurs posées sur le texte.
-      `body { background-color: ${colors.background}; color: ${colors.text};
+      `${EDITOR_FONT_FACES}
+       body { background-color: ${colors.surface}; color: ${colors.ink};
+              font-family: 'IBM Plex Sans', system-ui, sans-serif;
               font-size: 16px; line-height: 1.5; }
+       strong, b { font-weight: 600; }
+       h1, h2, h3 { font-weight: 600; letter-spacing: -0.01em; }
+       h1 { font-size: 24px; line-height: 30px; }
+       h2 { font-size: 20px; line-height: 26px; }
+       h3 { font-size: 17px; line-height: 24px; }
        mark { color: inherit; border-radius: 3px; padding: 0 2px; }
-       a { color: ${colors.tint}; }
-       code { background-color: ${colors.backgroundElement}; border-radius: 4px; padding: 1px 4px; }
-       blockquote { border-left: 3px solid ${colors.border}; margin-left: 0; padding-left: 12px;
-                    color: ${colors.textSecondary}; }
+       a { color: ${colors.accent}; }
+       code, pre { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 13px; }
+       code { background-color: ${colors.surfaceSunken}; border-radius: 4px; padding: 1px 4px; }
+       pre { background-color: ${colors.surfaceSunken}; border-radius: 6px; padding: 8px 12px; }
+       pre code { background: none; padding: 0; }
+       blockquote { border-left: 2px solid ${colors.borderStrong}; margin-left: 0; padding-left: 12px;
+                    color: ${colors.inkMuted}; }
+       ul[data-type="taskList"] input[type="checkbox"] { accent-color: ${colors.accent}; }
        img { display: block; border-radius: 8px; margin: 8px 0; }
-       .ProseMirror p.is-editor-empty:first-child::before { color: ${colors.textSecondary}; }`,
+       .ProseMirror p.is-editor-empty:first-child::before { color: ${colors.inkSubtle}; }`,
       'app-theme',
     );
   }, [editor, colors]);
@@ -187,6 +224,10 @@ function Editor({ prepared, images, store, editable, onChange, ref }: EditorProp
   };
 
   const showToolbar = editable && (state.isFocused || pickingImage);
+  /** Rangée de couleurs ouverte au-dessus de la barre. */
+  const [panel, setPanel] = useState<'color' | 'highlight' | null>(null);
+  const togglePanel = (next: 'color' | 'highlight') =>
+    setPanel((current) => (current === next ? null : next));
 
   return (
     <View style={styles.container}>
@@ -194,50 +235,84 @@ function Editor({ prepared, images, store, editable, onChange, ref }: EditorProp
         <RichText editor={editor} />
       </View>
       {imageError && (
-        <ThemedText themeColor="danger" type="small" style={styles.error}>
+        <ThemedText themeColor="danger" type="callout" style={styles.error}>
           {imageError}
         </ThemedText>
       )}
       {showToolbar && (
-        <View style={[styles.toolbar, { borderColor: colors.border }]}>
+        <View style={[styles.toolbar, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+          {panel === 'color' && (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              keyboardShouldPersistTaps="always"
+              contentContainerStyle={styles.panel}>
+              <Swatch
+                name="Couleur du texte par défaut"
+                active={state.activeColor === undefined}
+                onPress={editor.unsetColor}
+              />
+              {(Object.keys(palette.text) as NoteTextColor[]).map((token) => (
+                <Swatch
+                  key={token}
+                  name={`Texte ${TEXT_COLOR_NAMES[token]}`}
+                  color={palette.text[token]}
+                  active={sameColor(state.activeColor, palette.text[token])}
+                  onPress={() => editor.setColor(palette.text[token])}
+                />
+              ))}
+            </ScrollView>
+          )}
+          {panel === 'highlight' && (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              keyboardShouldPersistTaps="always"
+              contentContainerStyle={styles.panel}>
+              <Swatch
+                name="Sans surlignage"
+                active={state.activeHighlight === undefined}
+                onPress={editor.unsetHighlight}
+              />
+              {(Object.keys(palette.highlight) as NoteHighlightColor[]).map((token) => (
+                <Swatch
+                  key={token}
+                  name={`Surlignage ${HIGHLIGHT_NAMES[token]}`}
+                  background={palette.highlight[token]}
+                  active={sameColor(state.activeHighlight, palette.highlight[token])}
+                  onPress={() => editor.setHighlight(palette.highlight[token])}
+                />
+              ))}
+            </ScrollView>
+          )}
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
             keyboardShouldPersistTaps="always"
             contentContainerStyle={styles.toolbarContent}>
-            <Tool label="↶" name="Annuler" disabled={!state.canUndo} onPress={editor.undo} />
-            <Tool label="↷" name="Rétablir" disabled={!state.canRedo} onPress={editor.redo} />
+            <Tool icon={Undo2} name="Annuler" disabled={!state.canUndo} onPress={editor.undo} />
+            <Tool icon={Redo2} name="Rétablir" disabled={!state.canRedo} onPress={editor.redo} />
             <Separator />
-            <Tool label="🖼" name="Ajouter une image" disabled={pickingImage} onPress={insertImage} />
-            <Separator />
-            <Tool label="G" name="Gras" bold active={state.isBoldActive} onPress={editor.toggleBold} />
+            <Tool icon={Bold} name="Gras" active={state.isBoldActive} onPress={editor.toggleBold} />
+            <Tool icon={Italic} name="Italique" active={state.isItalicActive} onPress={editor.toggleItalic} />
             <Tool
-              label="I"
-              name="Italique"
-              italic
-              active={state.isItalicActive}
-              onPress={editor.toggleItalic}
-            />
-            <Tool
-              label="S"
+              icon={Underline}
               name="Souligné"
-              decoration="underline"
               active={state.isUnderlineActive}
               onPress={editor.toggleUnderline}
             />
             <Tool
-              label="B"
+              icon={Strikethrough}
               name="Barré"
-              decoration="line-through"
               active={state.isStrikeActive}
               onPress={editor.toggleStrike}
             />
-            <Tool label="<>" name="Code" active={state.isCodeActive} onPress={editor.toggleCode} />
+            <Tool icon={Code} name="Code" active={state.isCodeActive} onPress={editor.toggleCode} />
             <Separator />
             {([1, 2, 3] as const).map((level) => (
               <Tool
                 key={level}
-                label={`T${level}`}
+                icon={HEADING_ICONS[level]}
                 name={`Titre de niveau ${level}`}
                 active={state.headingLevel === level}
                 onPress={() => editor.toggleHeading(level)}
@@ -245,64 +320,43 @@ function Editor({ prepared, images, store, editable, onChange, ref }: EditorProp
             ))}
             <Separator />
             <Tool
-              label="•"
+              icon={List}
               name="Liste à puces"
               active={state.isBulletListActive}
               onPress={editor.toggleBulletList}
             />
             <Tool
-              label="1."
+              icon={ListOrdered}
               name="Liste numérotée"
               active={state.isOrderedListActive}
               onPress={editor.toggleOrderedList}
             />
             <Tool
-              label="☑"
+              icon={ListChecks}
               name="Liste de tâches"
               active={state.isTaskListActive}
               onPress={editor.toggleTaskList}
             />
             <Tool
-              label="❝"
+              icon={TextQuote}
               name="Citation"
               active={state.isBlockquoteActive}
               onPress={editor.toggleBlockquote}
             />
             <Separator />
             <Tool
-              label="A"
-              name="Couleur du texte par défaut"
-              active={state.activeColor === undefined}
-              onPress={editor.unsetColor}
+              icon={Baseline}
+              name="Couleur du texte"
+              active={panel === 'color' || state.activeColor !== undefined}
+              onPress={() => togglePanel('color')}
             />
-            {(Object.keys(palette.text) as NoteTextColor[]).map((token) => (
-              <Tool
-                key={token}
-                label="A"
-                name={`Texte ${TEXT_COLOR_NAMES[token]}`}
-                bold
-                color={palette.text[token]}
-                active={sameColor(state.activeColor, palette.text[token])}
-                onPress={() => editor.setColor(palette.text[token])}
-              />
-            ))}
-            <Separator />
             <Tool
-              label="∅"
-              name="Sans surlignage"
-              active={state.activeHighlight === undefined}
-              onPress={editor.unsetHighlight}
+              icon={Highlighter}
+              name="Surlignage"
+              active={panel === 'highlight' || state.activeHighlight !== undefined}
+              onPress={() => togglePanel('highlight')}
             />
-            {(Object.keys(palette.highlight) as NoteHighlightColor[]).map((token) => (
-              <Tool
-                key={token}
-                label="a"
-                name={`Surlignage ${HIGHLIGHT_NAMES[token]}`}
-                background={palette.highlight[token]}
-                active={sameColor(state.activeHighlight, palette.highlight[token])}
-                onPress={() => editor.setHighlight(palette.highlight[token])}
-              />
-            ))}
+            <Tool icon={ImageIcon} name="Ajouter une image" disabled={pickingImage} onPress={insertImage} />
           </ScrollView>
         </View>
       )}
@@ -310,62 +364,56 @@ function Editor({ prepared, images, store, editable, onChange, ref }: EditorProp
   );
 }
 
+const HEADING_ICONS = { 1: Heading1, 2: Heading2, 3: Heading3 } as const;
+
 type ToolProps = {
-  /** Texte court affiché sur le bouton. */
-  label: string;
+  icon: LucideIcon;
   /** Nom lu par les lecteurs d'écran. */
   name: string;
   active?: boolean;
   disabled?: boolean;
-  bold?: boolean;
-  italic?: boolean;
-  decoration?: 'underline' | 'line-through';
-  /** Couleur du libellé (aperçu d'une couleur de texte). */
+  onPress: () => void;
+};
+
+function Tool({ icon, name, active, disabled, onPress }: ToolProps) {
+  return (
+    <IconButton icon={icon} label={name} active={active} disabled={disabled} size={36} onPress={onPress} />
+  );
+}
+
+type SwatchProps = {
+  name: string;
+  active: boolean;
+  /** Couleur de texte proposée (aperçu sur un « A »). */
   color?: string;
-  /** Fond du libellé (aperçu d'un surlignage). */
+  /** Surlignage proposé. */
   background?: string;
   onPress: () => void;
 };
 
-function Tool({
-  label,
-  name,
-  active,
-  disabled,
-  bold,
-  italic,
-  decoration,
-  color,
-  background,
-  onPress,
-}: ToolProps) {
+/** Case d'une couleur de note ; sans couleur ni fond, c'est la gomme. */
+function Swatch({ name, active, color, background, onPress }: SwatchProps) {
   const { scheme } = useThemePreference();
   const colors = Colors[scheme];
-
+  const eraser = color === undefined && background === undefined;
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={name}
-      accessibilityState={{ selected: !!active, disabled: !!disabled }}
-      disabled={disabled}
+      accessibilityState={{ selected: active }}
       onPress={onPress}
-      style={({ pressed }) => [
-        styles.tool,
-        {
-          backgroundColor: background ?? (active ? colors.backgroundSelected : 'transparent'),
-          borderColor: active ? colors.tint : 'transparent',
-          opacity: disabled ? 0.35 : pressed ? 0.6 : 1,
-        },
+      style={[
+        styles.swatch,
+        { backgroundColor: background ?? colors.surfaceSunken },
+        active && { borderColor: colors.accent },
       ]}>
-      <ThemedText
-        style={{
-          color: color ?? colors.text,
-          fontWeight: bold ? 700 : 500,
-          fontStyle: italic ? 'italic' : 'normal',
-          textDecorationLine: decoration ?? 'none',
-        }}>
-        {label}
-      </ThemedText>
+      {eraser ? (
+        <Icon icon={Eraser} size={18} color="inkMuted" />
+      ) : (
+        <ThemedText type="headline" style={{ color: color ?? colors.ink }}>
+          A
+        </ThemedText>
+      )}
     </Pressable>
   );
 }
@@ -382,18 +430,19 @@ const styles = StyleSheet.create({
   toolbar: { borderTopWidth: StyleSheet.hairlineWidth },
   toolbarContent: {
     alignItems: 'center',
-    gap: Spacing.one,
+    gap: Spacing.half,
+    height: Sizes.toolbar,
     paddingHorizontal: Spacing.two,
-    paddingVertical: Spacing.one + Spacing.half,
   },
-  tool: {
-    minWidth: 40,
-    height: 40,
-    paddingHorizontal: Spacing.two,
-    borderRadius: 8,
-    borderWidth: 1.5,
+  panel: { alignItems: 'center', gap: Spacing.two, paddingHorizontal: Spacing.three, paddingTop: Spacing.two },
+  swatch: {
+    width: 36,
+    height: 36,
+    borderRadius: Radius.sm,
+    borderWidth: 2,
+    borderColor: 'transparent',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  separator: { width: StyleSheet.hairlineWidth, height: 24, marginHorizontal: Spacing.one },
+  separator: { width: 1, height: 20, marginHorizontal: Spacing.one },
 });

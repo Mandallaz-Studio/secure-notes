@@ -1,12 +1,19 @@
-import { Link, Stack, useRouter } from 'expo-router';
+import { Link, useRouter } from 'expo-router';
+import { Archive, FileText, Search, Settings, Settings2, Trash2 } from 'lucide-react-native';
 import { useState } from 'react';
-import { FlatList, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { FlatList, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Button } from '@/components/button';
 import { Chip } from '@/components/chip';
 import { confirmDestructive } from '@/components/confirm';
-import { TextField } from '@/components/text-field';
+import { EmptyState } from '@/components/empty-state';
+import { Fab } from '@/components/fab';
+import { IconButton } from '@/components/icon-button';
+import { NoteRow } from '@/components/note-row';
+import { SegmentedControl } from '@/components/segmented-control';
+import { SyncStatus } from '@/components/sync-status';
+import { SearchField } from '@/components/text-field';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
@@ -21,15 +28,27 @@ const VIEWS: { value: NoteView; label: string }[] = [
   { value: 'trash', label: 'Corbeille' },
 ];
 
-function emptyMessage(view: NoteView, filtered: boolean): string {
-  if (filtered) return 'Aucune note ne correspond.';
+const SEARCH_PLACEHOLDER: Record<NoteView, string> = {
+  active: 'Rechercher dans les notes',
+  archived: 'Rechercher dans les archives',
+  trash: 'Rechercher dans la corbeille',
+};
+
+function EmptyList({ view, filtered }: { view: NoteView; filtered: boolean }) {
+  if (filtered) return <EmptyState icon={Search} title="Aucune note ne correspond" />;
   switch (view) {
     case 'active':
-      return 'Aucune note. Touchez « Nouvelle note » pour commencer.';
+      return (
+        <EmptyState
+          icon={FileText}
+          title="Aucune note"
+          message="Vos notes sont chiffrées avant d’être enregistrées. Touchez « Nouvelle note » pour commencer."
+        />
+      );
     case 'archived':
-      return 'Aucune note archivée.';
+      return <EmptyState icon={Archive} title="Aucune note archivée" />;
     case 'trash':
-      return 'La corbeille est vide.';
+      return <EmptyState icon={Trash2} title="La corbeille est vide" />;
   }
 }
 
@@ -62,69 +81,42 @@ export default function NotesScreen() {
   };
 
   const renderNote = ({ item }: { item: NoteSummary }) => (
-    // Pas de <Link asChild> ici : sur Android, il fait perdre son style à la ligne.
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={item.title.trim() || 'Sans titre'}
+    <NoteRow
+      title={item.title}
+      preview={item.preview}
+      date={formatNoteDate(item.updatedAt)}
+      category={item.categoryId ? categoryNames.get(item.categoryId) : undefined}
       onPress={() => router.push({ pathname: '/note/[id]', params: { id: item.id } })}
-      style={({ pressed }) => [
-        styles.note,
-        { borderColor: theme.border, opacity: pressed ? 0.6 : 1 },
-      ]}>
-      <View style={styles.noteHeader}>
-        <ThemedText numberOfLines={1} style={styles.noteTitle}>
-          {item.title.trim() || 'Sans titre'}
-        </ThemedText>
-        <ThemedText type="small" themeColor="textSecondary">
-          {formatNoteDate(item.updatedAt)}
-        </ThemedText>
-      </View>
-      {item.preview !== '' && (
-        <ThemedText type="small" themeColor="textSecondary" numberOfLines={2}>
-          {item.preview}
-        </ThemedText>
-      )}
-      {item.categoryId && categoryNames.has(item.categoryId) && (
-        <ThemedText type="small" style={{ color: theme.tint }}>
-          {categoryNames.get(item.categoryId)}
-        </ThemedText>
-      )}
-    </Pressable>
+    />
   );
 
   return (
-    <ThemedView style={styles.container}>
-      <Stack.Screen
-        options={{
-          headerRight: () => (
-            <Link href="/settings" accessibilityRole="button" accessibilityLabel="Réglages">
-              <ThemedText style={{ color: theme.tint }}>Réglages</ThemedText>
-            </Link>
-          ),
-        }}
-      />
+    <ThemedView style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.inner}>
-        <View style={styles.controls}>
-          <View style={styles.row}>
-            {VIEWS.map((option) => (
-              <View key={option.value} style={styles.flex}>
-                <Button
-                  label={option.label}
-                  selected={view === option.value}
-                  onPress={() => setView(option.value)}
-                />
-              </View>
-            ))}
+        <View style={styles.header}>
+          <View style={styles.titleRow}>
+            <ThemedText type="display" accessibilityRole="header">
+              Notes
+            </ThemedText>
+            <Link href="/settings" asChild>
+              <IconButton icon={Settings} label="Réglages" />
+            </Link>
           </View>
-          <TextField
-            accessibilityLabel="Rechercher"
-            placeholder="Rechercher"
+          <SyncStatus />
+        </View>
+        <View style={styles.controls}>
+          <SearchField
+            placeholder={SEARCH_PLACEHOLDER[view]}
             value={search}
             onChangeText={setSearch}
-            autoCapitalize="none"
-            clearButtonMode="while-editing"
+            clearButtonMode="never"
           />
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+          <SegmentedControl options={VIEWS} value={view} onChange={setView} />
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            style={styles.chipScroll}>
             <View style={styles.chips}>
               <Chip
                 label="Toutes"
@@ -140,12 +132,12 @@ export default function NotesScreen() {
                 />
               ))}
               <Link href="/categories" asChild>
-                <Chip label="Gérer les catégories" />
+                <Chip label="Gérer" accessibilityLabel="Gérer les catégories" icon={Settings2} variant="action" />
               </Link>
             </View>
           </ScrollView>
           {view === 'trash' && notes !== null && notes.length > 0 && (
-            <Button label="Vider la corbeille" variant="danger" onPress={emptyTrash} />
+            <Button label="Vider la corbeille" icon={Trash2} variant="danger" onPress={emptyTrash} />
           )}
         </View>
 
@@ -159,13 +151,10 @@ export default function NotesScreen() {
             keyExtractor={(note) => note.id}
             renderItem={renderNote}
             keyboardShouldPersistTaps="handled"
+            style={[styles.list, { borderColor: theme.border }]}
             contentContainerStyle={{ paddingBottom: insets.bottom + Spacing.six + Spacing.four }}
             ListEmptyComponent={
-              notes === null ? undefined : (
-                <ThemedText themeColor="textSecondary" style={styles.message}>
-                  {emptyMessage(view, filtered)}
-                </ThemedText>
-              )
+              notes === null ? undefined : <EmptyList view={view} filtered={filtered} />
             }
           />
         )}
@@ -173,9 +162,8 @@ export default function NotesScreen() {
 
       {view === 'active' && store && (
         <View style={[styles.fab, { bottom: insets.bottom + Spacing.three }]}>
-          <Button
+          <Fab
             label="Nouvelle note"
-            variant="primary"
             onPress={() =>
               router.push({
                 pathname: '/note/[id]',
@@ -192,18 +180,13 @@ export default function NotesScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, alignItems: 'center' },
   inner: { flex: 1, width: '100%', maxWidth: MaxContentWidth },
-  controls: { padding: Spacing.three, gap: Spacing.two + Spacing.one },
-  row: { flexDirection: 'row', gap: Spacing.two },
-  flex: { flex: 1 },
+  header: { paddingHorizontal: Spacing.three, paddingTop: Spacing.two, gap: Spacing.half },
+  titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginRight: -Spacing.two },
+  controls: { padding: Spacing.three, gap: 12 },
+  // Sans cela, la rangée défilante s'étire en hauteur.
+  chipScroll: { flexGrow: 0 },
   chips: { flexDirection: 'row', gap: Spacing.two },
-  note: {
-    paddingVertical: Spacing.two + Spacing.one,
-    paddingHorizontal: Spacing.three,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    gap: Spacing.half,
-  },
-  noteHeader: { flexDirection: 'row', alignItems: 'baseline', gap: Spacing.two },
-  noteTitle: { flex: 1, fontWeight: 600 },
+  list: { borderTopWidth: StyleSheet.hairlineWidth },
   message: { textAlign: 'center', padding: Spacing.four },
   fab: { position: 'absolute', right: Spacing.three },
 });
