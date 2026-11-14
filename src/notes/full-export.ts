@@ -13,6 +13,8 @@ import type { Category, Note, NoteStore, NoteView } from '@/notes/types';
  *   notes/<catégorie>/<titre>.md      notes actives
  *   archives/<catégorie>/<titre>.md   notes archivées
  *   corbeille/<catégorie>/<titre>.md  notes de la corbeille
+ *   dossier privé/notes/…             notes du dossier privé (de même pour
+ *                                     archives/ et corbeille/)
  *   fichiers/<id>.<ext>               images du texte
  *   fichiers/<id>/<nom>               fichiers joints
  *
@@ -58,6 +60,7 @@ Gardez-le en lieu sûr, et supprimez-le quand vous n'en avez plus besoin.
 
 - notes/, archives/, corbeille/ : une note par fichier Markdown, rangée par
   catégorie. Les couleurs du texte et du surlignage n'existent pas en Markdown.
+- dossier privé/ : notes du dossier privé, rangées de la même façon.
 - fichiers/ : images des notes et fichiers joints.
 - secure-notes.json : toutes les données, sans perte (mise en forme complète,
   dates, catégories), lisibles par un programme.
@@ -99,8 +102,14 @@ function collectImageIds(node: RichNode, into: Set<string>): void {
   node.content?.forEach((child) => collectImageIds(child, into));
 }
 
-/** Les notes Markdown sont à deux niveaux de la racine : `notes/<catégorie>/`. */
-const FROM_NOTE = '../../';
+/** Dossier des notes du dossier privé, à la racine de l'archive. */
+const PRIVATE_FOLDER = 'dossier privé';
+
+/**
+ * Chemin de la racine vu d'une note Markdown : `notes/<catégorie>/`, ou
+ * `dossier privé/notes/<catégorie>/`.
+ */
+const rootFrom = (hidden: boolean) => (hidden ? '../../../' : '../../');
 
 export async function buildFullExport(store: ExportStore, now: number): Promise<FullExport> {
   const categories = await store.listCategories();
@@ -166,22 +175,23 @@ export async function buildFullExport(store: ExportStore, now: number): Promise<
         paths[attachment.id] = await writeAttachment(attachment.id, attachment.name);
       }
 
+      const root = rootFrom(note.hidden);
       let markdown = noteToMarkdown(
         note.title,
-        linkImages(doc, (id) => (paths[id] ? `${FROM_NOTE}${paths[id]}` : null)),
+        linkImages(doc, (id) => (paths[id] ? `${root}${paths[id]}` : null)),
       );
       if (note.attachments.length > 0) {
         const lines = note.attachments.map((attachment) => {
           const path = paths[attachment.id];
           return path
-            ? `- [${attachment.name}](${encodeURI(`${FROM_NOTE}${path}`)})`
+            ? `- [${attachment.name}](${encodeURI(`${root}${path}`)})`
             : `- ${attachment.name} (absent de cet appareil)`;
         });
         markdown = `${markdown}\n## Fichiers joints\n\n${lines.join('\n')}\n`;
       }
 
       const category = note.categoryId ? categoryName.get(note.categoryId) : undefined;
-      const folder = `${FOLDERS[view]}/${safeFileName(category ?? NO_CATEGORY)}`;
+      const folder = `${note.hidden ? `${PRIVATE_FOLDER}/` : ''}${FOLDERS[view]}/${safeFileName(category ?? NO_CATEGORY)}`;
       const file = uniquePath(taken, folder, markdownFileName(note.title));
       put(file, strToU8(markdown));
       notes.push({ ...note, file, files: paths });

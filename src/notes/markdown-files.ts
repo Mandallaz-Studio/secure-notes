@@ -4,7 +4,8 @@ import * as Sharing from 'expo-sharing';
 
 import { MAX_ATTACHMENT_BYTES } from '@/notes/blobs';
 import { markdownFileName, safeFileName } from '@/notes/markdown';
-import { ImportError, MAX_IMPORT_BYTES } from '@/notes/text-import';
+import { ImportError } from '@/notes/text-import';
+import { MAX_ZIP_BYTES } from '@/notes/zip-import';
 
 /** L'import et l'export de fichiers existent sur cette plateforme. */
 export const markdownFilesSupported = true;
@@ -91,9 +92,10 @@ export async function pickAttachment(): Promise<{
 }
 
 /**
- * Fait choisir un fichier à importer, quel que soit son type ; `null` si
- * l'utilisateur annule. C'est le contenu qui dit ensuite s'il s'agit de texte.
- * @throws ImportError si le fichier est trop volumineux.
+ * Fait choisir un fichier à importer (texte ou archive zip), quel que soit son
+ * type ; `null` si l'utilisateur annule. C'est le contenu qui dit ensuite de
+ * quoi il s'agit, et s'il n'est pas trop gros pour son type.
+ * @throws ImportError si le fichier dépasse la taille d'une archive zip.
  */
 export async function pickTextFile(): Promise<{ name: string; bytes: Uint8Array } | null> {
   const result = await DocumentPicker.getDocumentAsync({
@@ -105,8 +107,8 @@ export async function pickTextFile(): Promise<{ name: string; bytes: Uint8Array 
   const asset = result.assets[0];
   const copy = new File(asset.uri);
   try {
-    if ((asset.size ?? copy.size) > MAX_IMPORT_BYTES) {
-      throw new ImportError('Ce fichier est trop volumineux (2 Mo au maximum).');
+    if ((asset.size ?? copy.size) > MAX_ZIP_BYTES) {
+      throw new ImportError('Ce fichier est trop volumineux (20 Mo au maximum pour une archive zip).');
     }
     return { name: asset.name, bytes: new Uint8Array(await copy.arrayBuffer()) };
   } finally {

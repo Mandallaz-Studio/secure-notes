@@ -3,6 +3,7 @@ import { AppState } from 'react-native';
 
 import { useNotes } from '@/notes/notes-context';
 import type { NoteStore } from '@/notes/types';
+import { revokeTrashedShares, type ShareRemote } from '@/share/revoke';
 import { loadSyncConfig, saveSyncConfig, type SyncConfig } from '@/sync/config';
 import {
   synchronizeBlobs,
@@ -96,10 +97,12 @@ class SyncRunner {
   private running = false;
   private again = false;
   private stopped = false;
+  /** Notes de la corbeille dont les liens ont déjà été révoqués. */
+  private readonly revokedFor = new Set<string>();
 
   constructor(
     private readonly store: NoteStore,
-    private readonly remote: SyncRemote & BlobRemote,
+    private readonly remote: SyncRemote & BlobRemote & ShareRemote,
     private readonly wrapKey: Uint8Array,
     private readonly onStart: () => void,
     private readonly onDone: (outcome: RunOutcome) => void,
@@ -125,6 +128,13 @@ class SyncRunner {
     this.running = true;
     this.onStart();
     const outcome: RunOutcome = { result: null, error: null, blobs: null, blobError: null };
+    // Avant l'envoi : une suppression définitive pas encore envoyée désigne
+    // encore la note. Un échec est retenté à la synchronisation suivante.
+    try {
+      await revokeTrashedShares(this.store, this.remote, this.wrapKey, this.revokedFor);
+    } catch {
+      // Hors ligne, le plus souvent : la synchronisation échouera aussi.
+    }
     try {
       outcome.result = await synchronize(this.store, this.remote, this.wrapKey);
     } catch (cause) {

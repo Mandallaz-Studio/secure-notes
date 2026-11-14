@@ -47,6 +47,12 @@
       ],
       "react-native-libsodium",
       "expo-secure-store",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Secure Notes utilise Face ID pour ouvrir le dossier privé."
+        }
+      ],
       "expo-sharing",
       "./plugins/with-release-signing"
     ],

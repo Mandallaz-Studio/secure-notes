@@ -7,6 +7,7 @@ import {
   KeyRound,
   Link as LinkIcon,
   Lock,
+  LockKeyhole,
   Monitor,
   Moon,
   PenLine,
@@ -35,8 +36,10 @@ import { markdownFilesSupported, pickTextFile, shareFile } from '@/notes/markdow
 import { createNote, withBody, withTitle } from '@/notes/model';
 import { useNotes } from '@/notes/notes-context';
 import { submitNote } from '@/notes/pending-notes';
-import { contentOfDoc } from '@/notes/rich-text';
+import { contentOfDoc, type RichNode } from '@/notes/rich-text';
 import { fileToNote, ImportError } from '@/notes/text-import';
+import type { Note } from '@/notes/types';
+import { isZip, zipToNotes } from '@/notes/zip-import';
 import { useSync } from '@/sync/sync-context';
 import { useThemePreference, type ThemePreference } from '@/theme/theme-preference';
 import { useVault } from '@/vault/vault-context';
@@ -68,13 +71,24 @@ export default function SettingsScreen() {
 
         <VaultSection />
 
+        <ListGroup
+          title="Dossier privé"
+          footer="Ses notes n’apparaissent ni dans la liste ni dans la recherche. Son ouverture demande l’empreinte, le visage ou le code de l’appareil.">
+          <ListRow
+            icon={LockKeyhole}
+            label="Ouvrir le dossier privé"
+            chevron
+            onPress={() => router.push('/private')}
+          />
+        </ListGroup>
+
         <SyncSection />
 
         <StorageSection />
 
         <ListGroup
           title="Partage"
-          footer="Les liens créés depuis une note restent actifs jusqu’à leur révocation.">
+          footer="Les liens créés depuis une note restent actifs jusqu’à leur révocation, ou jusqu’à la mise à la corbeille de la note.">
           <ListRow
             icon={LinkIcon}
             label="Liens de partage"
@@ -224,30 +238,63 @@ const styles = StyleSheet.create({
 function ImportSection() {
   const router = useRouter();
   const { store } = useNotes();
-  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [report, setReport] = useState<{
+    text: string;
+    tone: 'success' | 'warning' | 'danger';
+  } | null>(null);
 
   const importFile = async () => {
     if (!store) return;
-    setError(null);
+    setReport(null);
     try {
       const picked = await pickTextFile();
       if (!picked) return;
-      const { title, doc } = fileToNote(picked.name, picked.bytes);
+      setBusy(true);
+      const zip = isZip(picked.bytes) ? zipToNotes(picked.bytes) : null;
+      const parsed = zip ? zip.notes : [fileToNote(picked.name, picked.bytes)];
       const now = Date.now();
-      // Les images du fichier deviennent des blobs, comme celles ajoutées dans l'éditeur.
-      const stored = await toStoredImages(doc, store, newImageCache());
-      const note = withBody(withTitle(createNote(now), title, now), contentOfDoc(stored), now);
-      // Si le coffre s'est verrouillé pendant le choix du fichier, la note est
-      // enregistrée au prochain déverrouillage et cet écran n'existe plus.
-      if (await submitNote(note)) {
-        router.push({ pathname: '/note/[id]', params: { id: note.id } });
+      // Les images des fichiers deviennent des blobs, comme celles ajoutées dans l'éditeur.
+      const cache = newImageCache();
+      const toNote = async ({ title, doc }: { title: string; doc: RichNode }, index: number) => {
+        const stored = await toStoredImages(doc, store, cache);
+        // Une milliseconde d'écart : la liste garde l'ordre de l'archive.
+        const at = now - index;
+        return withBody(withTitle(createNote(at), title, at), contentOfDoc(stored), at);
+      };
+      const notes: Note[] = [];
+      for (const [index, item] of parsed.entries()) notes.push(await toNote(item, index));
+      // Si le coffre s'est verrouillé pendant le choix du fichier, les notes sont
+      // enregistrées au prochain déverrouillage et cet écran n'existe plus.
+      let saved = true;
+      for (const note of notes) saved = (await submitNote(note)) && saved;
+      if (!saved) return;
+      if (!zip) {
+        router.push({ pathname: '/note/[id]', params: { id: notes[0].id } });
+        return;
       }
+      const skipped = zip.skipped;
+      setReport({
+        text:
+          `${notes.length} note(s) importée(s) depuis l’archive.` +
+          (skipped.length > 0
+            ? ` ${skipped.length} fichier(s) ignoré(s) : ${skipped
+                .slice(0, 5)
+                .map((file) => `${file.path} (${file.reason})`)
+                .join(', ')}${skipped.length > 5 ? '…' : ''}.`
+            : ''),
+        tone: skipped.length > 0 ? 'warning' : 'success',
+      });
     } catch (cause) {
-      setError(
-        cause instanceof ImportError
-          ? cause.message
-          : `Le fichier n'a pas pu être importé : ${String(cause)}`,
-      );
+      setReport({
+        text:
+          cause instanceof ImportError
+            ? cause.message
+            : `Le fichier n'a pas pu être importé : ${String(cause)}`,
+        tone: 'danger',
+      });
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -255,17 +302,17 @@ function ImportSection() {
     <>
       <ListGroup
         title="Import"
-        footer="Markdown (.md), texte brut (.txt), RTF, ou tout autre format texte (CSV, JSON, code…). La mise en forme Markdown est conservée.">
+        footer="Markdown (.md), texte brut (.txt), RTF, ou tout autre format texte (CSV, JSON, code…), seul ou dans une archive zip. La mise en forme Markdown est conservée.">
         <ListRow
           icon={Upload}
-          label="Importer un fichier"
-          detail="Crée une note à partir d’un fichier texte."
+          label={busy ? 'Import en cours…' : 'Importer un fichier'}
+          detail="Crée une note par fichier texte, ou une par fichier texte de l’archive zip."
           tone="accent"
-          disabled={!store}
+          disabled={!store || busy}
           onPress={importFile}
         />
       </ListGroup>
-      {error && <Notice tone="danger">{error}</Notice>}
+      {report && <Notice tone={report.tone}>{report.text}</Notice>}
     </>
   );
 }

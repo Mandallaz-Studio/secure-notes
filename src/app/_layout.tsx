@@ -89,6 +89,7 @@ function Navigation() {
             <Stack.Screen name="note/[id]" options={{ title: '' }} />
             <Stack.Screen name="categories" options={{ title: 'Catégories' }} />
             <Stack.Screen name="settings" options={{ title: 'Réglages' }} />
+            <Stack.Screen name="private" options={{ title: 'Dossier privé' }} />
             <Stack.Screen name="recreate" options={{ title: 'Recréer le coffre' }} />
             <Stack.Screen name="share/[noteId]" options={{ title: 'Partage par lien' }} />
             <Stack.Screen name="dev/crypto" options={{ title: 'Essai chiffrement' }} />

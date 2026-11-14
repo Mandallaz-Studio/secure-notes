@@ -13,11 +13,14 @@ import {
   Archive,
   ArchiveRestore,
   Download,
+  EyeOff,
   FileText,
   Image as ImageIcon,
+  LockKeyholeOpen,
   Paperclip,
   Settings2,
   Share2,
+  Star,
   Trash2,
   X,
 } from 'lucide-react-native';
@@ -42,6 +45,8 @@ import {
   withAttachments,
   withBody,
   withCategory,
+  withHidden,
+  withPinned,
   withTitle,
 } from '@/notes/model';
 import { noteToMarkdown } from '@/notes/markdown';
@@ -61,11 +66,16 @@ import type { Attachment, Note, NoteStore } from '@/notes/types';
 const SAVE_DELAY_MS = 400;
 
 export default function NoteScreen() {
-  const { id, category } = useLocalSearchParams<{ id: string; category?: string }>();
+  const { id, category, hidden } = useLocalSearchParams<{
+    id: string;
+    category?: string;
+    /** `1` : nouvelle note du dossier privé. */
+    hidden?: string;
+  }>();
   const { store, revision, invalidate } = useNotes();
   const isNew = id === 'new';
   const [note, setNote] = useState<Note | null>(() =>
-    isNew ? createNote(Date.now(), category || null) : null,
+    isNew ? createNote(Date.now(), category || null, hidden === '1') : null,
   );
   const [missing, setMissing] = useState(false);
   // Change quand la note est remplacée par une version venue d'un autre appareil.
@@ -316,7 +326,7 @@ function NoteEditor({ initial, isNew, store, revision, onChanged, onReplaced }: 
     <ThemedView type="surface" style={styles.container}>
       <Stack.Screen
         options={{
-          title: inTrash ? 'Corbeille' : note.archived ? 'Archive' : '',
+          title: inTrash ? 'Corbeille' : note.archived ? 'Archive' : note.hidden ? 'Privée' : '',
           headerStyle: { backgroundColor: theme.surface },
           headerRight: blank
             ? undefined
@@ -338,6 +348,15 @@ function NoteEditor({ initial, isNew, store, revision, onChanged, onReplaced }: 
                     </>
                   ) : (
                     <>
+                      <IconButton
+                        icon={Star}
+                        label={note.pinned ? 'Ne plus mettre en avant' : 'Mettre en avant'}
+                        active={note.pinned}
+                        filled={note.pinned}
+                        onPress={() =>
+                          void update(withPinned(latest.current, !latest.current.pinned, Date.now()), true)
+                        }
+                      />
                       {markdownFilesSupported && (
                         <IconButton
                           icon={Share2}
@@ -348,6 +367,15 @@ function NoteEditor({ initial, isNew, store, revision, onChanged, onReplaced }: 
                       {markdownFilesSupported && (
                         <IconButton icon={Download} label="Exporter en Markdown" onPress={exportMarkdown} />
                       )}
+                      <IconButton
+                        icon={note.hidden ? LockKeyholeOpen : EyeOff}
+                        label={
+                          note.hidden ? 'Sortir du dossier privé' : 'Déplacer dans le dossier privé'
+                        }
+                        onPress={() =>
+                          void leaveAfter((current, now) => withHidden(current, !current.hidden, now))
+                        }
+                      />
                       <IconButton
                         icon={note.archived ? ArchiveRestore : Archive}
                         label={note.archived ? 'Désarchiver' : 'Archiver'}

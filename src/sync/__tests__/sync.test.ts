@@ -7,6 +7,7 @@ import {
   renamed,
   trashed,
   withCategory,
+  withPinned,
   withText,
 } from '@/notes/model';
 import type { Note, NoteStore } from '@/notes/types';
@@ -103,6 +104,24 @@ describe('chiffrement des éléments', () => {
 
     expect(() => openItem(other.id, sealed, wrapKey)).toThrow();
     expect(() => openItem(note.id, sealed, generateKey())).toThrow();
+  });
+
+  it('transmet mise en avant et dossier privé, absents des notes d’avant', async () => {
+    const note = { ...withPinned(await write(phone, 'En avant'), true, 1), hidden: true };
+    expect(openItem(note.id, sealItem({ kind: 'note', note }, wrapKey), wrapKey)).toEqual({
+      kind: 'note',
+      note,
+    });
+    // `undefined` disparaît du JSON : c'est la forme d'une note envoyée avant.
+    const older = {
+      ...note,
+      pinned: undefined as unknown as boolean,
+      hidden: undefined as unknown as boolean,
+    };
+    expect(openItem(note.id, sealItem({ kind: 'note', note: older }, wrapKey), wrapKey)).toEqual({
+      kind: 'note',
+      note: { ...note, pinned: false, hidden: false },
+    });
   });
 
   it('chiffre différemment à chaque envoi', async () => {

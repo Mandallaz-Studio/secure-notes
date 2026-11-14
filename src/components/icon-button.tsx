@@ -13,6 +13,8 @@ type IconButtonProps = Omit<PressableProps, 'children' | 'style'> & {
   active?: boolean;
   tone?: 'default' | 'accent' | 'danger';
   size?: number;
+  /** Icône pleine (par exemple une étoile allumée). */
+  filled?: boolean;
 };
 
 /** Bouton carré portant une seule icône : en-têtes et barre d'édition. */
@@ -22,6 +24,7 @@ export function IconButton({
   active,
   tone = 'default',
   size = 40,
+  filled,
   disabled,
   ...rest
 }: IconButtonProps) {
@@ -51,7 +54,7 @@ export function IconButton({
           opacity: disabled ? 0.55 : 1,
         },
       ]}>
-      <Icon icon={icon} color={color} />
+      <Icon icon={icon} color={color} filled={filled} />
     </Pressable>
   );
 }

@@ -25,6 +25,10 @@ export type Note = {
   plainText: string;
   categoryId: string | null;
   archived: boolean;
+  /** Note mise en avant : affichée en tête des listes. */
+  pinned: boolean;
+  /** Note du dossier privé : absente des listes ordinaires. */
+  hidden: boolean;
   createdAt: number;
   updatedAt: number;
   /** Date de mise à la corbeille, ou `null` si la note n'y est pas. */
@@ -56,7 +60,7 @@ export type BodyContent = Pick<Note, 'body' | 'bodyFormat' | 'plainText'>;
 
 export type NoteSummary = Pick<
   Note,
-  'id' | 'title' | 'categoryId' | 'archived' | 'updatedAt' | 'deletedAt'
+  'id' | 'title' | 'categoryId' | 'archived' | 'pinned' | 'hidden' | 'updatedAt' | 'deletedAt'
 > & {
   /** Début du texte de la note. */
   preview: string;
@@ -77,12 +81,18 @@ export type NoteFilter = {
   categoryId?: string;
   /** Recherche dans le titre et le texte, insensible à la casse et aux accents. */
   search?: string;
+  /**
+   * `true` : notes du dossier privé seulement ; `false` : les autres.
+   * Absent : toutes (copie, export…) — un écran précise toujours.
+   */
+  hidden?: boolean;
 };
 
 /**
  * Stockage des notes. Deux implémentations : SQLite chiffrée (SQLCipher) sur
  * mobile, mémoire sur le web et dans les tests. Les listes sont triées de la
- * note la plus récemment modifiée à la plus ancienne.
+ * note la plus récemment modifiée à la plus ancienne, les notes mises en avant
+ * d'abord (sauf dans la corbeille).
  */
 export interface NoteStore {
   listNotes(filter: NoteFilter): Promise<NoteSummary[]>;
@@ -90,8 +100,11 @@ export interface NoteStore {
   /** Crée la note ou remplace celle qui porte le même identifiant. */
   saveNote(note: Note): Promise<void>;
   deleteNote(id: string): Promise<void>;
-  /** Supprime définitivement toutes les notes de la corbeille. */
-  emptyTrash(): Promise<void>;
+  /**
+   * Supprime définitivement les notes de la corbeille : celles du dossier
+   * privé (`hidden` vrai), les autres (faux), ou toutes (absent).
+   */
+  emptyTrash(hidden?: boolean): Promise<void>;
 
   listCategories(): Promise<Category[]>;
   saveCategory(category: Category): Promise<void>;

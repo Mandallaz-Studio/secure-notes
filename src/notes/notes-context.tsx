@@ -67,15 +67,15 @@ export function useNotes(): NotesContextValue {
 }
 
 /** Liste des notes correspondant au filtre, rechargée après chaque écriture. */
-export function useNoteList(filter: NoteFilter): NoteSummary[] | null {
+export function useNoteList(filter: NoteFilter & { hidden: boolean }): NoteSummary[] | null {
   const { store, revision } = useNotes();
   const [notes, setNotes] = useState<NoteSummary[] | null>(null);
-  const { view, categoryId, search } = filter;
+  const { view, categoryId, search, hidden } = filter;
 
   useEffect(() => {
     if (!store) return;
     let cancelled = false;
-    store.listNotes({ view, categoryId, search }).then(
+    store.listNotes({ view, categoryId, search, hidden }).then(
       (list) => {
         if (!cancelled) setNotes(list);
       },
@@ -86,7 +86,7 @@ export function useNoteList(filter: NoteFilter): NoteSummary[] | null {
     return () => {
       cancelled = true;
     };
-  }, [store, revision, view, categoryId, search]);
+  }, [store, revision, view, categoryId, search, hidden]);
 
   return store ? notes : null;
 }

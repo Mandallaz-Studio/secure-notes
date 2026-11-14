@@ -75,6 +75,10 @@ const MIGRATIONS: string[] = [
      PRIMARY KEY (note_id, blob_id)
    );
    CREATE INDEX note_blobs_by_blob ON note_blobs (blob_id);`,
+  // Version 4 : notes mises en avant.
+  `ALTER TABLE notes ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;`,
+  // Version 5 : dossier privé.
+  `ALTER TABLE notes ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0;`,
 ];
 
 type NoteRow = {
@@ -85,6 +89,8 @@ type NoteRow = {
   plain_text: string;
   category_id: string | null;
   archived: number;
+  pinned: number;
+  hidden: number;
   created_at: number;
   updated_at: number;
   deleted_at: number | null;
@@ -93,7 +99,7 @@ type NoteRow = {
 
 type SummaryRow = Pick<
   NoteRow,
-  'id' | 'title' | 'category_id' | 'archived' | 'updated_at' | 'deleted_at'
+  'id' | 'title' | 'category_id' | 'archived' | 'pinned' | 'hidden' | 'updated_at' | 'deleted_at'
 > & { preview: string };
 
 type CategoryRow = { id: string; name: string; created_at: number; updated_at: number };
@@ -101,7 +107,7 @@ type CategoryRow = { id: string; name: string; created_at: number; updated_at: n
 type SyncColumns = { dirty: number; server_seq: number | null };
 
 const NOTE_COLUMNS = `id, title, body, body_format, plain_text, category_id, archived,
-                      created_at, updated_at, deleted_at, attachments`;
+                      pinned, hidden, created_at, updated_at, deleted_at, attachments`;
 const CATEGORY_COLUMNS = 'id, name, created_at, updated_at';
 
 function attachmentsOf(json: string): Attachment[] {
@@ -122,6 +128,8 @@ function noteOfRow(row: NoteRow): Note {
     plainText: row.plain_text,
     categoryId: row.category_id,
     archived: row.archived === 1,
+    pinned: row.pinned === 1,
+    hidden: row.hidden === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at,
@@ -205,6 +213,10 @@ export class SqliteNoteStore implements NoteStore {
       where.push('deleted_at IS NULL', 'archived = ?');
       params.push(filter.view === 'archived' ? 1 : 0);
     }
+    if (filter.hidden !== undefined) {
+      where.push('hidden = ?');
+      params.push(filter.hidden ? 1 : 0);
+    }
     if (filter.categoryId !== undefined) {
       where.push('category_id = ?');
       params.push(filter.categoryId);
@@ -215,11 +227,11 @@ export class SqliteNoteStore implements NoteStore {
       params.push(likePattern(search));
     }
     const rows = await this.db.getAllAsync<SummaryRow>(
-      `SELECT id, title, category_id, archived, updated_at, deleted_at,
+      `SELECT id, title, category_id, archived, pinned, hidden, updated_at, deleted_at,
               substr(plain_text, 1, ${PREVIEW_LENGTH * 4}) AS preview
          FROM notes
         WHERE ${where.join(' AND ')}
-        ORDER BY updated_at DESC`,
+        ORDER BY ${filter.view === 'trash' ? '' : 'pinned DESC, '}updated_at DESC`,
       params,
     );
     return rows.map((row) => ({
@@ -228,6 +240,8 @@ export class SqliteNoteStore implements NoteStore {
       preview: previewOf(row.preview),
       categoryId: row.category_id,
       archived: row.archived === 1,
+      pinned: row.pinned === 1,
+      hidden: row.hidden === 1,
       updatedAt: row.updated_at,
       deletedAt: row.deleted_at,
     }));
@@ -250,14 +264,15 @@ export class SqliteNoteStore implements NoteStore {
     const local = remoteSeq === undefined;
     await this.db.runAsync(
       `INSERT INTO notes (id, title, body, body_format, plain_text, search_text,
-                          category_id, archived, created_at, updated_at, deleted_at,
-                          attachments, dirty, server_seq)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                          category_id, archived, pinned, hidden, created_at, updated_at,
+                          deleted_at, attachments, dirty, server_seq)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                ${local ? '(SELECT server_seq FROM tombstones WHERE id = ?)' : '?'})
        ON CONFLICT (id) DO UPDATE SET
          title = excluded.title, body = excluded.body, body_format = excluded.body_format,
          plain_text = excluded.plain_text, search_text = excluded.search_text,
          category_id = excluded.category_id, archived = excluded.archived,
+         pinned = excluded.pinned, hidden = excluded.hidden,
          created_at = excluded.created_at, updated_at = excluded.updated_at,
          deleted_at = excluded.deleted_at, attachments = excluded.attachments,
          dirty = excluded.dirty
@@ -271,6 +286,8 @@ export class SqliteNoteStore implements NoteStore {
         searchTextOf(note),
         note.categoryId,
         note.archived ? 1 : 0,
+        note.pinned ? 1 : 0,
+        note.hidden ? 1 : 0,
         note.createdAt,
         note.updatedAt,
         note.deletedAt,
@@ -336,8 +353,9 @@ export class SqliteNoteStore implements NoteStore {
     await this.pruneBlobRefs();
   }
 
-  async emptyTrash(): Promise<void> {
-    await this.bury('notes', 'deleted_at IS NOT NULL', []);
+  async emptyTrash(hidden?: boolean): Promise<void> {
+    if (hidden === undefined) await this.bury('notes', 'deleted_at IS NOT NULL', []);
+    else await this.bury('notes', `deleted_at IS NOT NULL AND hidden = ${hidden ? 1 : 0}`, []);
     await this.pruneBlobRefs();
   }
 

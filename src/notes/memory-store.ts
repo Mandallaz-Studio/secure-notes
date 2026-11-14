@@ -1,5 +1,5 @@
 import { blobIdsOf } from '@/notes/blobs';
-import { foldText, matchesFilter, summarize } from '@/notes/model';
+import { compareNotes, foldText, matchesFilter, summarize } from '@/notes/model';
 import type {
   BlobState,
   Category,
@@ -32,7 +32,7 @@ export class MemoryNoteStore implements NoteStore {
   async listNotes(filter: NoteFilter): Promise<NoteSummary[]> {
     return [...this.notes.values()]
       .filter((note) => matchesFilter(note, filter))
-      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .sort(compareNotes(filter.view))
       .map(summarize);
   }
 
@@ -50,9 +50,11 @@ export class MemoryNoteStore implements NoteStore {
     if (this.notes.delete(id)) this.bury(id);
   }
 
-  async emptyTrash(): Promise<void> {
+  async emptyTrash(hidden?: boolean): Promise<void> {
     for (const note of [...this.notes.values()]) {
-      if (note.deletedAt !== null) await this.deleteNote(note.id);
+      if (note.deletedAt !== null && (hidden === undefined || note.hidden === hidden)) {
+        await this.deleteNote(note.id);
+      }
     }
   }
 

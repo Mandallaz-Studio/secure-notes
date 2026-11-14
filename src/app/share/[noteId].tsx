@@ -156,7 +156,7 @@ export default function ShareScreen() {
       <Notice tone="secure" title="La clé reste dans le lien">
         Un lien donne accès à une copie de la note telle qu’elle est au moment du partage, sans
         ses fichiers joints. Toute personne qui a le lien peut la lire ; la clé de déchiffrement
-        n’est jamais envoyée au serveur.
+        n’est jamais envoyée au serveur. Mettre la note à la corbeille révoque ses liens.
       </Notice>
       {SHARE_SITE === '' && (
         <ThemedText type="callout" themeColor="inkMuted">

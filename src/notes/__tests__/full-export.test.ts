@@ -12,6 +12,7 @@ import {
   withArchived,
   withAttachments,
   withBody,
+  withHidden,
   withText,
 } from '@/notes/model';
 import { contentOfDoc, type RichNode } from '@/notes/rich-text';
@@ -128,6 +129,25 @@ describe('export complet', () => {
       'notes/Sans catégorie/Idée (3).md',
       'notes/Sans catégorie/Idée.md',
     ]);
+  });
+
+  it('range à part les notes du dossier privé, liens d’images compris', async () => {
+    const store = new MemoryNoteStore();
+    const imageId = newId();
+    await store.putBlob(imageId, PNG);
+    const note = withHidden(
+      withBody(withText(createNote(1), 'Secret', '', 1), contentOfDoc(docWithImage('x', imageId)), 1),
+      true,
+      1,
+    );
+    await store.saveNote(note);
+
+    const { paths, text } = await exportOf(store);
+
+    const file = 'dossier privé/notes/Sans catégorie/Secret.md';
+    expect(paths).toContain(file);
+    expect(text(file)).toContain(`](../../../fichiers/${imageId}.png)`);
+    expect(JSON.parse(text('secure-notes.json')).notes[0].hidden).toBe(true);
   });
 
   it('nomme l’archive avec la date', () => {

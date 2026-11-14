@@ -13,6 +13,8 @@ import {
   trashed,
   withArchived,
   withCategory,
+  withHidden,
+  withPinned,
   withText,
 } from '@/notes/model';
 import type { Note, NoteStore } from '@/notes/types';
@@ -102,6 +104,58 @@ describe('stockage des notes', () => {
 
     expect(list.map((note) => note.title)).toEqual(['Première', 'Deuxième']);
     expect(list[0].preview).toBe('modifiée');
+  });
+
+  it('place les notes mises en avant en tête, y compris dans une catégorie', async () => {
+    const work = newId();
+    const oldPinned = await add('Ancienne en avant', '', work);
+    await add('Récente');
+    await add('Récente du travail', '', work);
+    const otherPinned = await add('En avant ailleurs');
+    await store.saveNote(withPinned(oldPinned, true, oldPinned.updatedAt));
+    await store.saveNote(withPinned(otherPinned, true, otherPinned.updatedAt));
+
+    expect(await titles({ view: 'active' })).toEqual([
+      'En avant ailleurs',
+      'Ancienne en avant',
+      'Récente du travail',
+      'Récente',
+    ]);
+    expect(await titles({ view: 'active', categoryId: work })).toEqual([
+      'Ancienne en avant',
+      'Récente du travail',
+    ]);
+    // Dans la corbeille, seul compte l'ordre de suppression.
+    await store.saveNote(trashed(withPinned(oldPinned, true, tick()), tick()));
+    await store.saveNote(trashed((await store.getNote(otherPinned.id))!, tick()));
+    const third = await add('Troisième');
+    await store.saveNote(trashed(third, tick()));
+    expect(await titles({ view: 'trash' })).toEqual([
+      'Troisième',
+      'En avant ailleurs',
+      'Ancienne en avant',
+    ]);
+  });
+
+  it('sépare le dossier privé des autres notes, jusque dans la corbeille', async () => {
+    await add('Ordinaire', 'mot commun');
+    const secret = await add('Secrète', 'mot commun');
+    const thrown = await add('Secrète jetée');
+    const plain = await add('Ordinaire jetée');
+    await store.saveNote(withHidden(secret, true, tick()));
+    await store.saveNote(trashed(withHidden(thrown, true, tick()), tick()));
+    await store.saveNote(trashed(plain, tick()));
+
+    expect(await titles({ view: 'active', hidden: false, search: 'commun' })).toEqual(['Ordinaire']);
+    expect(await titles({ view: 'active', hidden: true })).toEqual(['Secrète']);
+    expect(await titles({ view: 'trash', hidden: false })).toEqual(['Ordinaire jetée']);
+    // Sans précision (copie, export), toutes les notes.
+    expect(await titles({ view: 'active' })).toEqual(['Secrète', 'Ordinaire']);
+
+    await store.emptyTrash(false);
+    expect(await titles({ view: 'trash' })).toEqual(['Secrète jetée']);
+    await store.emptyTrash(true);
+    expect(await titles({ view: 'trash' })).toEqual([]);
   });
 
   it('sépare notes actives, archives et corbeille', async () => {

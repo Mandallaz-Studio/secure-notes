@@ -57,6 +57,8 @@ function sameNote(a: Note, b: Note): boolean {
     a.bodyFormat === b.bodyFormat &&
     a.categoryId === b.categoryId &&
     a.archived === b.archived &&
+    a.pinned === b.pinned &&
+    a.hidden === b.hidden &&
     a.deletedAt === b.deletedAt &&
     JSON.stringify(a.attachments) === JSON.stringify(b.attachments)
   );

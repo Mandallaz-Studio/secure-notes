@@ -7,6 +7,7 @@ import type {
   Note,
   NoteFilter,
   NoteSummary,
+  NoteView,
 } from '@/notes/types';
 
 export const PREVIEW_LENGTH = 140;
@@ -44,6 +45,8 @@ export function summarize(note: Note): NoteSummary {
     preview: previewOf(note.plainText),
     categoryId: note.categoryId,
     archived: note.archived,
+    pinned: note.pinned,
+    hidden: note.hidden,
     updatedAt: note.updatedAt,
     deletedAt: note.deletedAt,
   };
@@ -55,12 +58,17 @@ export function matchesFilter(note: Note, filter: NoteFilter): boolean {
       ? note.deletedAt !== null
       : note.deletedAt === null && note.archived === (filter.view === 'archived');
   if (!inView) return false;
+  if (filter.hidden !== undefined && note.hidden !== filter.hidden) return false;
   if (filter.categoryId !== undefined && note.categoryId !== filter.categoryId) return false;
   const search = foldText(filter.search ?? '').trim();
   return search === '' || searchTextOf(note).includes(search);
 }
 
-export function createNote(now: number, categoryId: string | null = null): Note {
+export function createNote(
+  now: number,
+  categoryId: string | null = null,
+  hidden = false,
+): Note {
   return {
     id: newId(),
     title: '',
@@ -69,6 +77,8 @@ export function createNote(now: number, categoryId: string | null = null): Note 
     plainText: '',
     categoryId,
     archived: false,
+    pinned: false,
+    hidden,
     createdAt: now,
     updatedAt: now,
     deletedAt: null,
@@ -104,6 +114,24 @@ export function withCategory(note: Note, categoryId: string | null, now: number)
 
 export function withArchived(note: Note, archived: boolean, now: number): Note {
   return { ...note, archived, updatedAt: now };
+}
+
+export function withPinned(note: Note, pinned: boolean, now: number): Note {
+  return { ...note, pinned, updatedAt: now };
+}
+
+/** Entre dans le dossier privé (`true`) ou en sort. */
+export function withHidden(note: Note, hidden: boolean, now: number): Note {
+  return { ...note, hidden, updatedAt: now };
+}
+
+/**
+ * Ordre des listes : les plus récemment modifiées d'abord ; hors de la
+ * corbeille, les notes mises en avant passent devant.
+ */
+export function compareNotes(view: NoteView) {
+  return (a: Pick<Note, 'pinned' | 'updatedAt'>, b: Pick<Note, 'pinned' | 'updatedAt'>) =>
+    (view !== 'trash' ? Number(b.pinned) - Number(a.pinned) : 0) || b.updatedAt - a.updatedAt;
 }
 
 export function trashed(note: Note, now: number): Note {

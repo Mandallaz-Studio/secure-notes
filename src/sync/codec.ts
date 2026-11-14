@@ -49,6 +49,10 @@ type Payload =
       plainText: string;
       categoryId: string | null;
       archived: boolean;
+      /** Absent des notes écrites avant la mise en avant. */
+      pinned?: boolean;
+      /** Absent des notes écrites avant le dossier privé. */
+      hidden?: boolean;
       createdAt: number;
       updatedAt: number;
       deletedAt: number | null;
@@ -137,6 +141,8 @@ export function openItem(id: string, sealed: SealedItem, wrapKey: Uint8Array): R
     return { kind: 'category', category };
   }
   const { title, body, bodyFormat, plainText, categoryId, archived, deletedAt } = payload;
+  const pinned = payload.pinned ?? false;
+  const hidden = payload.hidden ?? false;
   const attachments = payload.attachments ?? [];
   if (
     payload.t === 'note' &&
@@ -146,6 +152,8 @@ export function openItem(id: string, sealed: SealedItem, wrapKey: Uint8Array): R
     isText(plainText) &&
     (categoryId === null || isText(categoryId)) &&
     typeof archived === 'boolean' &&
+    typeof pinned === 'boolean' &&
+    typeof hidden === 'boolean' &&
     (deletedAt === null || isTime(deletedAt)) &&
     Array.isArray(attachments) &&
     attachments.every(isAttachment)
@@ -158,6 +166,8 @@ export function openItem(id: string, sealed: SealedItem, wrapKey: Uint8Array): R
       plainText,
       categoryId,
       archived,
+      pinned,
+      hidden,
       createdAt,
       updatedAt,
       deletedAt,
