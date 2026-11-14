@@ -4,6 +4,7 @@ import {
   newFileKey,
   openChunk,
   sealChunk,
+  sealedSizeOf,
   unwrapFileKey,
   wrapFileKey,
 } from '@/crypto/chunks';
@@ -24,7 +25,12 @@ import type { NoteStore } from '@/notes/types';
  * appareil qui ne voyait plus la note), il est renvoyé.
  */
 
-export type RemoteAttachment = { wrappedKey: string; chunkCount: number };
+export type RemoteAttachment = {
+  wrappedKey: string;
+  chunkCount: number;
+  /** Taille totale des blocs chiffrés : c'est elle que le serveur compte dans le quota. */
+  sizeBytes: number;
+};
 
 export type StorageUsage = { usedBytes: number; quotaBytes: number };
 
@@ -34,14 +40,19 @@ export class QuotaExceededError extends Error {}
 export interface BlobRemote {
   listAttachmentIds(): Promise<string[]>;
   getAttachment(id: string): Promise<RemoteAttachment | null>;
-  /** @returns `false` si le fichier existe déjà. */
+  /**
+   * Déclare un fichier : le serveur réserve sa taille sur le quota.
+   * @returns `false` si le fichier existe déjà.
+   * @throws QuotaExceededError si le quota du compte ne suffit pas.
+   */
   createAttachment(id: string, attachment: RemoteAttachment): Promise<boolean>;
   /**
-   * Envoie un bloc ; sans effet s'il existe déjà.
+   * Envoie un bloc chiffré ; sans effet s'il existe déjà.
    * @throws QuotaExceededError si le quota du compte est atteint.
    */
-  putChunk(id: string, index: number, data: string): Promise<void>;
-  getChunk(id: string, index: number): Promise<string | null>;
+  putChunk(id: string, index: number, data: Uint8Array): Promise<void>;
+  getChunk(id: string, index: number): Promise<Uint8Array | null>;
+  /** Supprime les blocs du fichier, puis sa déclaration. */
   deleteAttachment(id: string): Promise<void>;
   getUsage(): Promise<StorageUsage | null>;
 }
@@ -67,12 +78,15 @@ async function upload(
   wrapKey: Uint8Array,
 ): Promise<void> {
   const chunkCount = chunkCountOf(data.length);
+  const sizeBytes = sealedSizeOf(data.length);
   let fileKey: Uint8Array | null = null;
   // Reprise d'un envoi interrompu : les blocs déjà là ont été chiffrés avec la clé du serveur.
   const existing = await remote.getAttachment(id);
   if (existing) {
     try {
-      if (existing.chunkCount !== chunkCount) throw new Error('taille différente');
+      if (existing.chunkCount !== chunkCount || existing.sizeBytes !== sizeBytes) {
+        throw new Error('taille différente');
+      }
       fileKey = unwrapFileKey(id, existing.wrappedKey, wrapKey);
     } catch {
       await remote.deleteAttachment(id);
@@ -80,7 +94,11 @@ async function upload(
   }
   if (!fileKey) {
     fileKey = newFileKey();
-    await remote.createAttachment(id, { wrappedKey: wrapFileKey(id, fileKey, wrapKey), chunkCount });
+    await remote.createAttachment(id, {
+      wrappedKey: wrapFileKey(id, fileKey, wrapKey),
+      chunkCount,
+      sizeBytes,
+    });
   }
   try {
     for (let index = 0; index < chunkCount; index += 1) {
@@ -176,7 +194,7 @@ export async function synchronizeBlobs(
       result.uploaded += 1;
     } catch (cause) {
       if (!(cause instanceof QuotaExceededError)) throw cause;
-      // Les blocs déjà envoyés occupent le quota pour rien : on les retire.
+      // La déclaration et les blocs déjà envoyés occupent le quota pour rien : on les retire.
       await remote.deleteAttachment(blob.id);
       await store.setBlobUploaded(blob.id, false);
       result.overQuota += 1;

@@ -10,6 +10,7 @@ import {
   withText,
 } from '@/notes/model';
 import type { Note, NoteStore } from '@/notes/types';
+import { QuotaExceededError } from '@/sync/blobs';
 import { openItem, sealDeletion, sealItem } from '@/sync/codec';
 import { synchronize, type RemoteRow, type SyncRemote } from '@/sync/engine';
 import {
@@ -360,7 +361,8 @@ describe('compte de synchronisation', () => {
       const path = input.replace('https://a.example', '');
       const method = init.method ?? 'GET';
       calls.push({ method, path, headers: init.headers as Record<string, string> });
-      const [status, body] = answer(method, path, init.body ? JSON.parse(String(init.body)) : null);
+      const sent = typeof init.body === 'string' ? JSON.parse(init.body) : null;
+      const [status, body] = answer(method, path, sent);
       return { status, text: async () => (body === null ? '' : JSON.stringify(body)) };
     }) as unknown as typeof fetch;
     return { impl, calls };
@@ -451,5 +453,86 @@ describe('compte de synchronisation', () => {
         throw new TypeError('Network request failed');
       }) as unknown as typeof fetch).pull(0, 10),
     ).rejects.toThrow(/injoignable/);
+  });
+
+  it('dépose, relit et supprime les blocs chiffrés dans le bucket Storage', async () => {
+    const objects = new Map<string, Uint8Array>();
+    const rows: Record<string, unknown>[] = [];
+    const calls: string[] = [];
+    const json = (status: number, body: unknown) => ({
+      status,
+      text: async () => (body === null ? '' : JSON.stringify(body)),
+    });
+    const impl = (async (input: string, init: RequestInit) => {
+      const path = input.replace('https://a.example', '');
+      const method = init.method ?? 'GET';
+      calls.push(`${method} ${path}`);
+      if (path.startsWith('/auth')) {
+        return json(200, { access_token: 'jeton', user: { id: 'moi' } });
+      }
+      if (path.startsWith('/rest/v1/attachments')) {
+        if (method === 'POST') rows.push(JSON.parse(String(init.body)));
+        if (method === 'DELETE') rows.length = 0;
+        return json(method === 'POST' ? 201 : method === 'DELETE' ? 204 : 200, rows);
+      }
+      const upload = '/storage/v1/object/attachments/';
+      const download = '/storage/v1/object/authenticated/attachments/';
+      if (method === 'POST' && path.startsWith(upload)) {
+        const name = path.slice(upload.length);
+        // Storage signale un doublon par une réponse 400 portant le code 409.
+        if (objects.has(name)) return json(400, { statusCode: '409', error: 'Duplicate' });
+        objects.set(name, init.body as unknown as Uint8Array);
+        return json(200, { Key: name });
+      }
+      if (method === 'GET' && path.startsWith(download)) {
+        const found = objects.get(path.slice(download.length));
+        if (!found) return json(400, { statusCode: '404', error: 'not_found' });
+        return { status: 200, arrayBuffer: async () => found.slice().buffer };
+      }
+      if (method === 'DELETE' && path === '/storage/v1/object/attachments') {
+        for (const name of JSON.parse(String(init.body)).prefixes) objects.delete(name);
+        return json(200, []);
+      }
+      return json(500, null);
+    }) as unknown as typeof fetch;
+    const remote = remoteWith(impl);
+
+    const attachment = { wrappedKey: 'k', chunkCount: 2, sizeBytes: 300000 };
+    expect(await remote.createAttachment('f1', attachment)).toBe(true);
+    expect(rows[0]).toEqual({ id: 'f1', wrapped_key: 'k', chunk_count: 2, size_bytes: 300000 });
+    await remote.putChunk('f1', 0, new Uint8Array([1, 2, 3]));
+    await remote.putChunk('f1', 0, new Uint8Array([9]));
+    await remote.putChunk('f1', 1, new Uint8Array([4]));
+    expect([...objects.keys()]).toEqual(['moi/f1/0', 'moi/f1/1']);
+    expect(await remote.getChunk('f1', 0)).toEqual(new Uint8Array([1, 2, 3]));
+    expect(await remote.getChunk('f1', 5)).toBeNull();
+    expect(await remote.getAttachment('f1')).toEqual(attachment);
+
+    await remote.deleteAttachment('f1');
+    expect(objects.size).toBe(0);
+    expect(rows.length).toBe(0);
+    // Les blocs partent avant la ligne qui les décrit.
+    expect(calls.slice(-2)).toEqual([
+      'DELETE /storage/v1/object/attachments',
+      'DELETE /rest/v1/attachments?id=eq.f1',
+    ]);
+  });
+
+  it('reconnaît un refus pour quota, à la déclaration comme au dépôt', async () => {
+    const { impl } = fakeFetch((method, path) => {
+      if (path.startsWith('/auth')) return [200, { access_token: 'j', user: { id: 'moi' } }];
+      if (path.startsWith('/rest/v1/profiles')) {
+        return [200, [{ storage_quota_bytes: 100, storage_used_bytes: 100 }]];
+      }
+      if (path.startsWith('/storage')) return [400, { statusCode: '403', error: 'Unauthorized' }];
+      return [400, { code: 'P0001', message: 'storage_quota_exceeded' }];
+    });
+    const remote = remoteWith(impl);
+    await expect(
+      remote.createAttachment('f1', { wrappedKey: 'k', chunkCount: 1, sizeBytes: 50 }),
+    ).rejects.toBeInstanceOf(QuotaExceededError);
+    await expect(remote.putChunk('f1', 0, new Uint8Array([1]))).rejects.toBeInstanceOf(
+      QuotaExceededError,
+    );
   });
 });

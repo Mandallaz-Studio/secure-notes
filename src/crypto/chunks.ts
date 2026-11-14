@@ -1,4 +1,12 @@
-import { decrypt, encrypt, fromBase64, generateKey, toBase64 } from '@/crypto/aead';
+import {
+  decrypt,
+  encrypt,
+  fromBase64,
+  generateKey,
+  NONCE_BYTES,
+  TAG_BYTES,
+  toBase64,
+} from '@/crypto/aead';
 
 /**
  * Chiffrement d'un fichier par blocs.
@@ -38,27 +46,32 @@ export function unwrapFileKey(id: string, wrapped: string, wrapKey: Uint8Array):
   return decrypt(fromBase64(wrapped), wrapKey, keyContext(id));
 }
 
-/** Bloc de rang `index` du fichier `data`, chiffré, en base64. */
+/** Taille totale des blocs chiffrés d'un fichier de `size` octets. */
+export function sealedSizeOf(size: number): number {
+  return size + chunkCountOf(size) * (NONCE_BYTES + TAG_BYTES);
+}
+
+/** Bloc de rang `index` du fichier `data`, chiffré. */
 export function sealChunk(
   id: string,
   data: Uint8Array,
   index: number,
   fileKey: Uint8Array,
-): string {
+): Uint8Array {
   const total = chunkCountOf(data.length);
   const slice = data.subarray(index * CHUNK_BYTES, (index + 1) * CHUNK_BYTES);
-  return toBase64(encrypt(slice, fileKey, chunkContext(id, index, total)));
+  return encrypt(slice, fileKey, chunkContext(id, index, total));
 }
 
 /** @throws si le bloc a été altéré, déplacé, ou vient d'un autre fichier. */
 export function openChunk(
   id: string,
-  sealed: string,
+  sealed: Uint8Array,
   index: number,
   total: number,
   fileKey: Uint8Array,
 ): Uint8Array {
-  return decrypt(fromBase64(sealed), fileKey, chunkContext(id, index, total));
+  return decrypt(sealed, fileKey, chunkContext(id, index, total));
 }
 
 /** Recolle les blocs déchiffrés d'un fichier. */

@@ -6,6 +6,7 @@ import {
   newFileKey,
   openChunk,
   sealChunk,
+  sealedSizeOf,
   unwrapFileKey,
   wrapFileKey,
 } from '@/crypto/chunks';
@@ -51,14 +52,22 @@ function bytesOf(length: number, seed = 1): Uint8Array {
 /** Serveur simulé : mêmes règles que les tables `items`, `attachments` et `attachment_chunks`. */
 class FakeServer {
   rows = new Map<string, RemoteRow>();
-  attachments = new Map<string, RemoteAttachment & { chunks: Map<number, string> }>();
+  attachments = new Map<string, RemoteAttachment & { chunks: Map<number, Uint8Array> }>();
   quotaBytes = 50 * 1024 * 1024;
   private seq = 0;
 
+  /** Place réservée : la taille annoncée de chaque fichier déclaré. */
   get usedBytes(): number {
     let total = 0;
+    for (const attachment of this.attachments.values()) total += attachment.sizeBytes;
+    return total;
+  }
+
+  /** Place réellement occupée par les blocs déposés. */
+  get storedBytes(): number {
+    let total = 0;
     for (const attachment of this.attachments.values()) {
-      for (const chunk of attachment.chunks.values()) total += Math.floor((chunk.length * 3) / 4);
+      for (const chunk of attachment.chunks.values()) total += chunk.length;
     }
     return total;
   }
@@ -84,20 +93,22 @@ class FakeServer {
       listAttachmentIds: async () => [...this.attachments.keys()],
       getAttachment: async (id) => {
         const found = this.attachments.get(id);
-        return found ? { wrappedKey: found.wrappedKey, chunkCount: found.chunkCount } : null;
+        return found
+          ? { wrappedKey: found.wrappedKey, chunkCount: found.chunkCount, sizeBytes: found.sizeBytes }
+          : null;
       },
       createAttachment: async (id, attachment) => {
         if (this.attachments.has(id)) return false;
+        if (this.usedBytes + attachment.sizeBytes > this.quotaBytes) throw new QuotaExceededError();
         this.attachments.set(id, { ...attachment, chunks: new Map() });
         return true;
       },
       putChunk: async (id, index, data) => {
         const attachment = this.attachments.get(id);
         if (!attachment) throw new Error('fichier inconnu');
+        if (index >= attachment.chunkCount) throw new Error('rang hors du fichier');
         if (attachment.chunks.has(index)) return;
-        if (this.usedBytes + Math.floor((data.length * 3) / 4) > this.quotaBytes) {
-          throw new QuotaExceededError();
-        }
+        if (this.storedBytes >= this.quotaBytes) throw new QuotaExceededError();
         attachment.chunks.set(index, data);
       },
       getChunk: async (id, index) => this.attachments.get(id)?.chunks.get(index) ?? null,
@@ -284,6 +295,9 @@ describe('synchronisation des blobs', () => {
     const { id } = await attach(phone, size);
     expect((await syncAll(phone)).uploaded).toBe(1);
     expect(server.attachments.get(id)!.chunks.size).toBe(3);
+    // La taille annoncée au serveur est exactement celle des blocs déposés.
+    expect(server.storedBytes).toBe(server.usedBytes);
+    expect(server.usedBytes).toBe(sealedSizeOf(size));
 
     const result = await syncAll(tablet);
     expect(result.downloaded).toBe(1);
@@ -306,7 +320,7 @@ describe('synchronisation des blobs', () => {
     await phone.saveNote(note);
     await syncAll(phone);
     const stored = server.attachments.get(id)!;
-    const visible = latin1(fromBase64(stored.chunks.get(0)!));
+    const visible = latin1(stored.chunks.get(0)!);
     expect(visible).not.toContain('secret');
   });
 
@@ -319,6 +333,7 @@ describe('synchronisation des blobs', () => {
     expect(server.attachments.has(small.id)).toBe(true);
     expect(server.attachments.has(big.id)).toBe(false);
     expect(server.usedBytes).toBeLessThanOrEqual(server.quotaBytes);
+    expect(server.storedBytes).toBe(server.usedBytes);
     // Le fichier reste sur l'appareil et repart quand le quota est relevé.
     expect(await phone.getBlob(big.id)).toEqual(bytesOf(CHUNK_BYTES * 2, 3));
     server.quotaBytes = 50 * 1024 * 1024;

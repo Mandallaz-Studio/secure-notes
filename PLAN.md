@@ -1,6 +1,6 @@
 # Secure Notes — plan de développement
 
-> Document de reprise pour les prochaines sessions. Dernière mise à jour : 2026-11-13.
+> Document de reprise pour les prochaines sessions. Dernière mise à jour : 2026-11-14.
 > État : **phases 0 à 5 terminées**. Prochaine étape : phase 6 (partage par lien).
 > À faire sur l'instance Supabase : appliquer `supabase/migrations/20261114000000_attachments.sql`.
 
@@ -57,7 +57,7 @@ cloud optionnelle via Supabase. Le serveur ne doit jamais voir de données en cl
 | Client Supabase | Appels HTTP directs (Auth + PostgREST), **sans `supabase-js`** | Trois requêtes suffisent ; moins de code tiers à auditer, aucune dépendance native, réutilisable tel quel sur la page de lecture web |
 | Mot de passe du compte | Dérivé du secret d'authentification **et de l'adresse de l'instance** | Une instance malveillante n'apprend rien qui permette de se connecter ailleurs (et d'y supprimer les notes). Contrepartie : tous les appareils doivent saisir exactement la même adresse |
 | Plateformes | iOS et Android | Voir ligne « App web complète » |
-| Stockage des fichiers (phase 5) | Blocs chiffrés dans une table Postgres (`attachment_chunks`), **pas dans un bucket Storage** | Le quota est vérifié dans la transaction qui écrit le bloc ; les politiques de Storage ne connaissent pas la taille du fichier au moment où elles s'appliquent. Contrepartie : les fichiers occupent la base Postgres |
+| Stockage des fichiers (phase 5) | Blocs chiffrés dans un **bucket Storage privé** (`attachments`), un objet par bloc ; la table `attachments` ne garde qu'une ligne par fichier | Demande de l'utilisateur (2026-11-14) : Storage offre plus de place que la base. Les politiques de Storage ne connaissant pas la taille d'un objet avant son dépôt, le quota est réservé à la déclaration du fichier (taille annoncée) et revérifié à chaque bloc sur la place réellement occupée |
 
 ### Encore ouvert
 
@@ -105,12 +105,12 @@ Par partage : clé aléatoire de 256 bits, indépendante, placée dans le fragme
   d'e-mail désactivée sur l'instance.
 - Tables prévues : `profiles` (dont `storage_quota_bytes`, défaut 52 428 800),
   `items` (notes et catégories, blobs chiffrés, version, tombstone),
-  `attachments` (métadonnées et taille), `shared_notes` (copie rechiffrée, lisible
+  `attachments` (clé chiffrée, nombre de blocs, taille), `shared_notes` (copie rechiffrée, lisible
   publiquement par identifiant).
 - Bucket Storage privé pour les fichiers chiffrés.
 - RLS : chaque utilisateur ne lit et n'écrit que ses lignes.
-- Quota : vérifié côté serveur (trigger sur `attachments` + politique Storage), pièces
-  jointes et images collées confondues.
+- Quota : vérifié côté serveur (déclencheur sur `attachments` + politique Storage),
+  pièces jointes et images collées confondues.
 - Instance modifiable dans l'app : URL **et** clé anon. Migrations SQL versionnées dans
   `supabase/migrations/` pour l'auto-hébergement.
 
@@ -485,17 +485,21 @@ Fait :
 - **Chiffrement par blocs** (`src/crypto/chunks.ts`) : clé aléatoire par fichier,
   chiffrée par la clé d'enveloppe ; blocs de 256 Kio ; chaque bloc authentifie
   l'identifiant du fichier, son rang et le nombre total de blocs.
-- **Serveur** (`supabase/migrations/20261114000000_attachments.sql`) : tables
-  `attachments` et `attachment_chunks`, RLS par compte, colonne
-  `profiles.storage_used_bytes` tenue par déclencheur. Un bloc qui ferait dépasser
-  `storage_quota_bytes` est refusé (`storage_quota_exceeded`).
+- **Serveur** (`supabase/migrations/20261114000000_attachments.sql`) : table
+  `attachments` (une ligne par fichier) et bucket Storage privé `attachments`, où
+  chaque bloc chiffré est l'objet `<compte>/<fichier>/<rang>`, envoyé en binaire.
+  RLS par compte sur la table et sur le bucket ; un bloc déposé ne se remplace pas.
+  Quota : la taille annoncée est réservée à la déclaration du fichier
+  (`profiles.storage_used_bytes`, refus `storage_quota_exceeded`), et chaque dépôt de
+  bloc est refusé si la place réellement occupée dans le bucket atteint le quota (un
+  client modifié ne dépasse donc que d'un bloc au plus).
 - **Synchro** (`src/sync/blobs.ts`), après celle des notes : envoi des blobs référencés,
   téléchargement de ceux qui manquent, reprise d'un envoi interrompu, suppression (ici
   et sur le serveur) d'un blob que plus aucune note ne référence depuis 10 minutes.
   Un échec côté fichiers ne bloque pas la synchro des notes.
 - **Réglages → Stockage** : place occupée sur l'appareil ; avec la synchro, jauge
   « utilisé sur quota » et message si le serveur a refusé des fichiers.
-- 132 tests Jest (21 nouveaux) ; types et lint passent.
+- 134 tests Jest (23 nouveaux) ; types et lint passent.
 
 Vérifié sur `Pixel_10` : mise à niveau d'une base de la veille (version 2 → 3, notes
 conservées), affichage d'une ancienne image `data:` puis sa conversion en blob à la
@@ -505,7 +509,10 @@ ouverture (contenu exact dans la feuille de partage), indicateur de stockage.
 Non vérifié :
 - **Tout le côté serveur** : la migration n'a été ni appliquée ni exécutée (pas d'accès
   au tableau de bord, pas de Postgres local). Le refus au-delà du quota, la reprise et
-  le ménage ne sont couverts que par Jest, contre un serveur simulé.
+  le ménage ne sont couverts que par Jest, contre un serveur simulé. En particulier,
+  les formes exactes des réponses de Storage (doublon, refus RLS, objet absent) et le
+  droit de poser des politiques sur `storage.objects` depuis une migration sont à
+  confirmer sur l'instance.
 - La synchro d'images et de fichiers entre deux appareils.
 - iOS ; un fichier joint de plusieurs Mo ; une vraie photo d'appareil.
 
@@ -516,6 +523,7 @@ Limites connues :
 - Un appareil ne supprime du serveur que les blobs qu'il connaît : un blob dont le seul
   appareil détenteur est effacé avant le ménage reste sur le serveur et occupe le quota.
 - Les notes elles-mêmes ne comptent pas dans le quota.
+- Supprimer un compte côté serveur laisse ses objets dans le bucket (à vider à la main).
 - Un fichier ouvert quitte le coffre **en clair** (copie supprimée après 2 minutes).
 
 ## 5. Points d'attention

@@ -10,7 +10,7 @@ import type { RemoteRow, SyncRemote } from '@/sync/engine';
 
 /**
  * Accès à une instance Supabase, directement par ses API HTTP (Auth et
- * PostgREST) : trois requêtes suffisent, sans bibliothèque tierce.
+ * PostgREST, Storage pour les fichiers), sans bibliothèque tierce.
  *
  * Le compte n'a pas d'e-mail réel : l'adresse est fabriquée à partir de
  * l'identifiant du compte, et le mot de passe est dérivé de la phrase de
@@ -71,11 +71,16 @@ export function credentialsFor(
 
 type Json = Record<string, unknown>;
 
-type Reply = { status: number; body: unknown };
+type Reply = { status: number; body: unknown; bytes?: Uint8Array };
+
+/** Bucket Storage privé des blocs chiffrés (voir la migration « attachments »). */
+const BUCKET = 'attachments';
+/** Nombre d'objets supprimés par requête. */
+const DELETE_BATCH = 100;
 
 export class SupabaseRemote implements SyncRemote, BlobRemote {
   readonly instanceId: string;
-  private session: { token: string; expiresAt: number } | null = null;
+  private session: { token: string; expiresAt: number; userId: string | null } | null = null;
 
   constructor(
     private readonly instance: SyncInstance,
@@ -85,23 +90,39 @@ export class SupabaseRemote implements SyncRemote, BlobRemote {
     this.instanceId = instance.url;
   }
 
-  private async send(method: string, path: string, body?: Json, headers?: Json): Promise<Reply> {
+  /**
+   * @param body Objet envoyé en JSON, ou octets envoyés tels quels.
+   * @param binary La réponse 200 est lue en octets (`bytes`) et non en JSON.
+   */
+  private async send(
+    method: string,
+    path: string,
+    body?: Json | Uint8Array,
+    headers?: Json,
+    binary = false,
+  ): Promise<Reply> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    const raw = body instanceof Uint8Array;
     let response: Response;
-    let text: string;
+    let text = '';
+    let bytes: Uint8Array | undefined;
     try {
       response = await this.fetchImpl(`${this.instance.url}${path}`, {
         method,
         headers: {
           apikey: this.instance.anonKey,
-          ...(body ? { 'Content-Type': 'application/json' } : {}),
+          ...(body ? { 'Content-Type': raw ? 'application/octet-stream' : 'application/json' } : {}),
           ...headers,
         } as Record<string, string>,
-        body: body ? JSON.stringify(body) : undefined,
+        body: raw ? (body as unknown as BodyInit) : body ? JSON.stringify(body) : undefined,
         signal: controller.signal,
       });
-      text = await response.text();
+      if (binary && response.status === 200) {
+        bytes = new Uint8Array(await response.arrayBuffer());
+      } else {
+        text = await response.text();
+      }
     } catch {
       throw new SyncError('Instance injoignable (pas de réseau, ou adresse incorrecte).');
     } finally {
@@ -113,7 +134,7 @@ export class SupabaseRemote implements SyncRemote, BlobRemote {
     } catch {
       // Réponse non JSON : ce n'est pas une instance Supabase, ou une erreur de proxy.
     }
-    return { status: response.status, body: parsed };
+    return { status: response.status, body: parsed, bytes };
   }
 
   private static describe(reply: Reply): string {
@@ -126,7 +147,12 @@ export class SupabaseRemote implements SyncRemote, BlobRemote {
     const body = (reply.body ?? {}) as Json;
     if (reply.status !== 200 || typeof body.access_token !== 'string') return false;
     const lifetime = typeof body.expires_in === 'number' ? body.expires_in : 3600;
-    this.session = { token: body.access_token, expiresAt: Date.now() + lifetime * 1000 };
+    const user = (body.user ?? {}) as Json;
+    this.session = {
+      token: body.access_token,
+      expiresAt: Date.now() + lifetime * 1000,
+      userId: typeof user.id === 'string' ? user.id : null,
+    };
     return true;
   }
 
@@ -161,22 +187,66 @@ export class SupabaseRemote implements SyncRemote, BlobRemote {
     throw new SyncError(`Création du compte impossible (${SupabaseRemote.describe(signup)}).`);
   }
 
-  /** Requête authentifiée vers PostgREST ; rouvre la session si elle a expiré. */
-  private async rest(method: string, path: string, body?: Json, prefer?: string): Promise<Reply> {
+  private async ensureSession(): Promise<void> {
+    if (!this.session || this.session.expiresAt - TOKEN_MARGIN_MS < Date.now()) {
+      await this.signIn();
+    }
+  }
+
+  /** Requête authentifiée ; rouvre la session si elle a expiré. */
+  private async authed(
+    method: string,
+    path: string,
+    body?: Json | Uint8Array,
+    headers?: Json,
+    binary = false,
+  ): Promise<Reply> {
     for (let attempt = 0; ; attempt += 1) {
-      if (!this.session || this.session.expiresAt - TOKEN_MARGIN_MS < Date.now()) {
-        await this.signIn();
-      }
-      const reply = await this.send(method, `/rest/v1${path}`, body, {
-        Authorization: `Bearer ${this.session?.token}`,
-        ...(prefer ? { Prefer: prefer } : {}),
-      });
+      await this.ensureSession();
+      const reply = await this.send(
+        method,
+        path,
+        body,
+        { Authorization: `Bearer ${this.session?.token}`, ...headers },
+        binary,
+      );
       if (reply.status === 401 && attempt === 0) {
         this.session = null;
         continue;
       }
       return reply;
     }
+  }
+
+  /** Requête authentifiée vers PostgREST. */
+  private rest(method: string, path: string, body?: Json, prefer?: string): Promise<Reply> {
+    return this.authed(method, `/rest/v1${path}`, body, prefer ? { Prefer: prefer } : undefined);
+  }
+
+  /** Chemin, dans le bucket, du bloc `index` du fichier `id` : `<compte>/<fichier>/<rang>`. */
+  private async chunkPath(id: string, index: number): Promise<string> {
+    await this.ensureSession();
+    const userId = this.session?.userId;
+    if (!userId) throw new SyncError("L'instance n'a pas indiqué l'identifiant du compte.");
+    return `${userId}/${id}/${index}`;
+  }
+
+  /**
+   * Code d'une réponse de Storage : selon sa version, l'erreur réelle est dans
+   * le statut HTTP ou dans le champ `statusCode` d'une réponse 400.
+   */
+  private static storageCode(reply: Reply): number {
+    const code = Number(((reply.body ?? {}) as Json).statusCode);
+    return Number.isInteger(code) && code > 0 ? code : reply.status;
+  }
+
+  private static failStorage(reply: Reply): never {
+    if (SupabaseRemote.storageCode(reply) === 404) {
+      throw new SyncError(
+        "L'instance n'est pas à jour pour Secure Notes (bucket « attachments » absent) : appliquez les migrations du dossier supabase/migrations.",
+      );
+    }
+    throw new SyncError(`Le stockage a refusé la requête (${SupabaseRemote.describe(reply)}).`);
   }
 
   private static fail(reply: Reply): never {
@@ -238,6 +308,8 @@ export class SupabaseRemote implements SyncRemote, BlobRemote {
   }
 
   // --- Fichiers joints et images -------------------------------------------
+  // Une ligne par fichier dans la table `attachments` ; les blocs chiffrés sont
+  // des objets du bucket Storage.
 
   async listAttachmentIds(): Promise<string[]> {
     const ids: string[] = [];
@@ -255,14 +327,21 @@ export class SupabaseRemote implements SyncRemote, BlobRemote {
   }
 
   async getAttachment(id: string): Promise<RemoteAttachment | null> {
-    const reply = await this.rest('GET', `/attachments?id=eq.${id}&select=wrapped_key,chunk_count`);
+    const reply = await this.rest(
+      'GET',
+      `/attachments?id=eq.${id}&select=wrapped_key,chunk_count,size_bytes`,
+    );
     if (reply.status !== 200 || !Array.isArray(reply.body)) SupabaseRemote.fail(reply);
     const row = reply.body[0] as Json | undefined;
     if (!row) return null;
-    if (typeof row.wrapped_key !== 'string' || typeof row.chunk_count !== 'number') {
+    if (
+      typeof row.wrapped_key !== 'string' ||
+      typeof row.chunk_count !== 'number' ||
+      typeof row.size_bytes !== 'number'
+    ) {
       throw new SyncError('Réponse du serveur inattendue.');
     }
-    return { wrappedKey: row.wrapped_key, chunkCount: row.chunk_count };
+    return { wrappedKey: row.wrapped_key, chunkCount: row.chunk_count, sizeBytes: row.size_bytes };
   }
 
   async createAttachment(id: string, attachment: RemoteAttachment): Promise<boolean> {
@@ -270,39 +349,61 @@ export class SupabaseRemote implements SyncRemote, BlobRemote {
       id,
       wrapped_key: attachment.wrappedKey,
       chunk_count: attachment.chunkCount,
+      size_bytes: attachment.sizeBytes,
     });
+    if (reply.status === 201) return true;
     if (reply.status === 409) return false;
-    if (reply.status !== 201) SupabaseRemote.fail(reply);
-    return true;
-  }
-
-  async putChunk(id: string, index: number, data: string): Promise<void> {
-    const reply = await this.rest('POST', '/attachment_chunks', {
-      attachment_id: id,
-      idx: index,
-      data,
-    });
-    if (reply.status === 201) return;
     const body = (reply.body ?? {}) as Json;
-    // Bloc déjà envoyé lors d'une tentative précédente.
-    if (reply.status === 409 && body.code === '23505') return;
     if (typeof body.message === 'string' && body.message.includes('storage_quota_exceeded')) {
       throw new QuotaExceededError('Quota de stockage atteint');
     }
     SupabaseRemote.fail(reply);
   }
 
-  async getChunk(id: string, index: number): Promise<string | null> {
-    const reply = await this.rest(
+  async putChunk(id: string, index: number, data: Uint8Array): Promise<void> {
+    const path = await this.chunkPath(id, index);
+    const reply = await this.authed('POST', `/storage/v1/object/${BUCKET}/${path}`, data);
+    if (reply.status === 200) return;
+    const code = SupabaseRemote.storageCode(reply);
+    // Bloc déjà envoyé lors d'une tentative précédente.
+    if (code === 409) return;
+    if (code === 403) {
+      // Refus par la politique du bucket : le quota est atteint, sauf autre cause.
+      const usage = await this.getUsage();
+      if (usage && usage.usedBytes >= usage.quotaBytes) {
+        throw new QuotaExceededError('Quota de stockage atteint');
+      }
+    }
+    SupabaseRemote.failStorage(reply);
+  }
+
+  async getChunk(id: string, index: number): Promise<Uint8Array | null> {
+    const path = await this.chunkPath(id, index);
+    const reply = await this.authed(
       'GET',
-      `/attachment_chunks?attachment_id=eq.${id}&idx=eq.${index}&select=data`,
+      `/storage/v1/object/authenticated/${BUCKET}/${path}`,
+      undefined,
+      undefined,
+      true,
     );
-    if (reply.status !== 200 || !Array.isArray(reply.body)) SupabaseRemote.fail(reply);
-    const row = reply.body[0] as Json | undefined;
-    return typeof row?.data === 'string' ? row.data : null;
+    if (reply.status === 200 && reply.bytes) return reply.bytes;
+    // Bloc pas encore déposé : l'envoi par l'autre appareil est en cours.
+    if (SupabaseRemote.storageCode(reply) === 404) return null;
+    SupabaseRemote.failStorage(reply);
   }
 
   async deleteAttachment(id: string): Promise<void> {
+    // Les blocs d'abord : tant que la ligne existe, un ménage interrompu se reprend.
+    const attachment = await this.getAttachment(id);
+    if (!attachment) return;
+    const prefix = (await this.chunkPath(id, 0)).slice(0, -1);
+    for (let start = 0; start < attachment.chunkCount; start += DELETE_BATCH) {
+      const count = Math.min(DELETE_BATCH, attachment.chunkCount - start);
+      const reply = await this.authed('DELETE', `/storage/v1/object/${BUCKET}`, {
+        prefixes: Array.from({ length: count }, (_, offset) => `${prefix}${start + offset}`),
+      });
+      if (reply.status !== 200) SupabaseRemote.failStorage(reply);
+    }
     const reply = await this.rest('DELETE', `/attachments?id=eq.${id}`);
     if (reply.status !== 204 && reply.status !== 200) SupabaseRemote.fail(reply);
   }
