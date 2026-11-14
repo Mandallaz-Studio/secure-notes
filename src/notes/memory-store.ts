@@ -32,7 +32,7 @@ export class MemoryNoteStore implements NoteStore {
   async listNotes(filter: NoteFilter): Promise<NoteSummary[]> {
     return [...this.notes.values()]
       .filter((note) => matchesFilter(note, filter))
-      .sort(compareNotes(filter.view))
+      .sort(compareNotes(filter.view, filter.sort))
       .map(summarize);
   }
 

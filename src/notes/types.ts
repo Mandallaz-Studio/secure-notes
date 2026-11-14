@@ -75,8 +75,13 @@ export type Category = {
 
 export type NoteView = 'active' | 'archived' | 'trash';
 
+/** Ordre des listes : par titre (A → Z ou Z → A) ou par date de modification. */
+export type NoteSort = 'title-asc' | 'title-desc' | 'updated-desc' | 'updated-asc';
+
 export type NoteFilter = {
   view: NoteView;
+  /** Absent : les plus récemment modifiées d'abord. */
+  sort?: NoteSort;
   /** Absent : toutes les catégories. */
   categoryId?: string;
   /** Recherche dans le titre et le texte, insensible à la casse et aux accents. */
@@ -90,9 +95,9 @@ export type NoteFilter = {
 
 /**
  * Stockage des notes. Deux implémentations : SQLite chiffrée (SQLCipher) sur
- * mobile, mémoire sur le web et dans les tests. Les listes sont triées de la
- * note la plus récemment modifiée à la plus ancienne, les notes mises en avant
- * d'abord (sauf dans la corbeille).
+ * mobile, mémoire sur le web et dans les tests. Les listes suivent l'ordre
+ * `filter.sort` (par défaut, de la note la plus récemment modifiée à la plus
+ * ancienne), les notes mises en avant d'abord (sauf dans la corbeille).
  */
 export interface NoteStore {
   listNotes(filter: NoteFilter): Promise<NoteSummary[]>;

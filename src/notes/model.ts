@@ -6,6 +6,7 @@ import type {
   Category,
   Note,
   NoteFilter,
+  NoteSort,
   NoteSummary,
   NoteView,
 } from '@/notes/types';
@@ -125,13 +126,43 @@ export function withHidden(note: Note, hidden: boolean, now: number): Note {
   return { ...note, hidden, updatedAt: now };
 }
 
+export const DEFAULT_SORT: NoteSort = 'updated-desc';
+
+const titleCollator = new Intl.Collator('fr', { sensitivity: 'base', numeric: true });
+
 /**
- * Ordre des listes : les plus récemment modifiées d'abord ; hors de la
- * corbeille, les notes mises en avant passent devant.
+ * Compare deux titres ; les notes sans titre vont toujours en fin de liste,
+ * quel que soit le sens.
  */
-export function compareNotes(view: NoteView) {
-  return (a: Pick<Note, 'pinned' | 'updatedAt'>, b: Pick<Note, 'pinned' | 'updatedAt'>) =>
-    (view !== 'trash' ? Number(b.pinned) - Number(a.pinned) : 0) || b.updatedAt - a.updatedAt;
+function compareTitles(a: string, b: string, direction: 1 | -1): number {
+  const ta = a.trim();
+  const tb = b.trim();
+  if (ta === '' || tb === '') return Number(ta === '') - Number(tb === '');
+  return direction * titleCollator.compare(ta, tb);
+}
+
+/**
+ * Ordre des listes selon `sort` (par défaut, les plus récemment modifiées
+ * d'abord) ; hors de la corbeille, les notes mises en avant passent devant. À
+ * titre égal, la plus récemment modifiée d'abord.
+ */
+export function compareNotes(view: NoteView, sort: NoteSort = DEFAULT_SORT) {
+  type Sortable = Pick<Note, 'title' | 'pinned' | 'updatedAt'>;
+  return (a: Sortable, b: Sortable) => {
+    const pinned = view !== 'trash' ? Number(b.pinned) - Number(a.pinned) : 0;
+    if (pinned !== 0) return pinned;
+    switch (sort) {
+      case 'title-asc':
+      case 'title-desc':
+        return (
+          compareTitles(a.title, b.title, sort === 'title-asc' ? 1 : -1) || b.updatedAt - a.updatedAt
+        );
+      case 'updated-asc':
+        return a.updatedAt - b.updatedAt;
+      case 'updated-desc':
+        return b.updatedAt - a.updatedAt;
+    }
+  };
 }
 
 export function trashed(note: Note, now: number): Note {

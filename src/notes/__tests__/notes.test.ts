@@ -106,6 +106,59 @@ describe('stockage des notes', () => {
     expect(list[0].preview).toBe('modifiée');
   });
 
+  it('trie par titre ou par date de modification dans les deux sens', async () => {
+    const zebre = await add('zèbre');
+    await add('Éléphant');
+    await add('');
+    await add('note 10');
+    await add('Note 9');
+    await add('abeille');
+    await store.saveNote(withText(zebre, 'zèbre', 'modifiée', tick()));
+
+    // Accents et casse ignorés, nombres dans l'ordre naturel ; sans titre en dernier.
+    expect(await titles({ view: 'active', sort: 'title-asc' })).toEqual([
+      'abeille',
+      'Éléphant',
+      'Note 9',
+      'note 10',
+      'zèbre',
+      '',
+    ]);
+    expect(await titles({ view: 'active', sort: 'title-desc' })).toEqual([
+      'zèbre',
+      'note 10',
+      'Note 9',
+      'Éléphant',
+      'abeille',
+      '',
+    ]);
+    expect(await titles({ view: 'active', sort: 'updated-desc' })).toEqual([
+      'zèbre',
+      'abeille',
+      'Note 9',
+      'note 10',
+      '',
+      'Éléphant',
+    ]);
+    expect(await titles({ view: 'active', sort: 'updated-asc' })).toEqual([
+      'Éléphant',
+      '',
+      'note 10',
+      'Note 9',
+      'abeille',
+      'zèbre',
+    ]);
+  });
+
+  it('garde les notes mises en avant en tête quel que soit le tri', async () => {
+    await add('Alpha');
+    const pinned = await add('Zulu');
+    await store.saveNote(withPinned(pinned, true, pinned.updatedAt));
+
+    expect(await titles({ view: 'active', sort: 'title-asc' })).toEqual(['Zulu', 'Alpha']);
+    expect(await titles({ view: 'active', sort: 'updated-asc' })).toEqual(['Zulu', 'Alpha']);
+  });
+
   it('place les notes mises en avant en tête, y compris dans une catégorie', async () => {
     const work = newId();
     const oldPinned = await add('Ancienne en avant', '', work);

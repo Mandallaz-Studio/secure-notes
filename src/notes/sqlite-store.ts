@@ -2,7 +2,7 @@ import * as SQLite from 'expo-sqlite';
 
 import { toHex } from '@/crypto/vectors';
 import { blobIdsOf } from '@/notes/blobs';
-import { foldText, previewOf, PREVIEW_LENGTH, searchTextOf } from '@/notes/model';
+import { compareNotes, foldText, previewOf, PREVIEW_LENGTH, searchTextOf } from '@/notes/model';
 import type {
   Attachment,
   BlobState,
@@ -230,11 +230,11 @@ export class SqliteNoteStore implements NoteStore {
       `SELECT id, title, category_id, archived, pinned, hidden, updated_at, deleted_at,
               substr(plain_text, 1, ${PREVIEW_LENGTH * 4}) AS preview
          FROM notes
-        WHERE ${where.join(' AND ')}
-        ORDER BY ${filter.view === 'trash' ? '' : 'pinned DESC, '}updated_at DESC`,
+        WHERE ${where.join(' AND ')}`,
       params,
     );
-    return rows.map((row) => ({
+    // Tri en JavaScript : les collations de SQLite ignorent les accents français.
+    const notes = rows.map((row) => ({
       id: row.id,
       title: row.title,
       preview: previewOf(row.preview),
@@ -245,6 +245,7 @@ export class SqliteNoteStore implements NoteStore {
       updatedAt: row.updated_at,
       deletedAt: row.deleted_at,
     }));
+    return notes.sort(compareNotes(filter.view, filter.sort));
   }
 
   async getNote(id: string): Promise<Note | null> {

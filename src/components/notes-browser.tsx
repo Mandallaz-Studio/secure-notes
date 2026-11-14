@@ -2,6 +2,7 @@ import { Link, useRouter } from 'expo-router';
 import {
   Archive,
   ArchiveRestore,
+  ArrowUpDown,
   FileText,
   Lock,
   Search,
@@ -23,6 +24,7 @@ import { Fab } from '@/components/fab';
 import { IconButton } from '@/components/icon-button';
 import { NoteRow } from '@/components/note-row';
 import { SegmentedControl } from '@/components/segmented-control';
+import { SORT_OPTIONS, SortPicker } from '@/components/sort-picker';
 import { SearchField } from '@/components/text-field';
 import { ThemedText } from '@/components/themed-text';
 import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
@@ -31,6 +33,7 @@ import { deleteNotes, updateNotes } from '@/notes/bulk';
 import { formatNoteDate } from '@/notes/format';
 import { restored, trashed, withArchived, withCategory } from '@/notes/model';
 import { useCategories, useNoteList, useNotes } from '@/notes/notes-context';
+import { useNoteSort } from '@/notes/sort-preference';
 import type { Note, NoteSummary, NoteView } from '@/notes/types';
 
 const VIEWS: { value: NoteView; label: string }[] = [
@@ -90,10 +93,13 @@ export function NotesBrowser({ hidden, header }: NotesBrowserProps) {
   const [view, setView] = useState<NoteView>('active');
   const [categoryId, setCategoryId] = useState<string | undefined>(undefined);
   const [search, setSearch] = useState('');
+  const [sort, setSort] = useNoteSort();
+  const [sorting, setSorting] = useState(false);
+  const sortLabel = SORT_OPTIONS.find((option) => option.value === sort)?.label;
 
   // Une catégorie supprimée entre-temps ne filtre plus rien.
   const activeCategoryId = categories.some((c) => c.id === categoryId) ? categoryId : undefined;
-  const notes = useNoteList({ view, categoryId: activeCategoryId, search, hidden });
+  const notes = useNoteList({ view, sort, categoryId: activeCategoryId, search, hidden });
   const categoryNames = new Map(categories.map((c) => [c.id, c.name]));
   const filtered = search.trim() !== '' || activeCategoryId !== undefined;
 
@@ -208,12 +214,22 @@ export function NotesBrowser({ hidden, header }: NotesBrowserProps) {
       <View style={styles.inner}>
         {header}
         <View style={styles.controls}>
-          <SearchField
-            placeholder={SEARCH_PLACEHOLDER[view]}
-            value={search}
-            onChangeText={setSearch}
-            clearButtonMode="never"
-          />
+          <View style={styles.searchRow}>
+            <View style={styles.flex}>
+              <SearchField
+                placeholder={SEARCH_PLACEHOLDER[view]}
+                value={search}
+                onChangeText={setSearch}
+                clearButtonMode="never"
+              />
+            </View>
+            <IconButton
+              icon={ArrowUpDown}
+              label={`Trier les notes (${sortLabel})`}
+              active={sort !== 'updated-desc'}
+              onPress={() => setSorting(true)}
+            />
+          </View>
           <SegmentedControl options={VIEWS} value={view} onChange={changeView} />
           <ScrollView
             horizontal
@@ -343,6 +359,16 @@ export function NotesBrowser({ hidden, header }: NotesBrowserProps) {
         </View>
       )}
 
+      <SortPicker
+        visible={sorting}
+        value={sort}
+        onClose={() => setSorting(false)}
+        onPick={(next) => {
+          setSorting(false);
+          setSort(next);
+        }}
+      />
+
       <CategoryPicker
         visible={picking}
         title={`Catégorie de ${selectedIds.length} note${selectedIds.length > 1 ? 's' : ''}`}
@@ -379,6 +405,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, width: '100%', alignItems: 'center' },
   inner: { flex: 1, width: '100%', maxWidth: MaxContentWidth },
   controls: { padding: Spacing.three, gap: 12 },
+  searchRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.one },
   // Sans cela, la rangée défilante s'étire en hauteur.
   chipScroll: { flexGrow: 0 },
   chips: { flexDirection: 'row', gap: Spacing.two },

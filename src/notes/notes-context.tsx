@@ -70,12 +70,12 @@ export function useNotes(): NotesContextValue {
 export function useNoteList(filter: NoteFilter & { hidden: boolean }): NoteSummary[] | null {
   const { store, revision } = useNotes();
   const [notes, setNotes] = useState<NoteSummary[] | null>(null);
-  const { view, categoryId, search, hidden } = filter;
+  const { view, sort, categoryId, search, hidden } = filter;
 
   useEffect(() => {
     if (!store) return;
     let cancelled = false;
-    store.listNotes({ view, categoryId, search, hidden }).then(
+    store.listNotes({ view, sort, categoryId, search, hidden }).then(
       (list) => {
         if (!cancelled) setNotes(list);
       },
@@ -86,7 +86,7 @@ export function useNoteList(filter: NoteFilter & { hidden: boolean }): NoteSumma
     return () => {
       cancelled = true;
     };
-  }, [store, revision, view, categoryId, search, hidden]);
+  }, [store, revision, view, sort, categoryId, search, hidden]);
 
   return store ? notes : null;
 }
