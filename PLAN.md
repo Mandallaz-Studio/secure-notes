@@ -573,27 +573,29 @@ Vérifié, dans un navigateur, sur l'export web servi en local avec la CSP du fi
   citation, image incluse) ; l'image distante du document n'est pas chargée ; une seule
   requête sort, vers `get_shared_note`.
 
-Non vérifié :
-- **Le critère de la phase** (un lien s'ouvre sans compte, puis plus après révocation) :
-  la migration n'est pas appliquée sur l'instance. Création, liste et révocation ne sont
-  couvertes que par Jest, contre un serveur simulé.
-- **Tout le côté app** : l'émulateur s'est arrêté pendant la session. Ni l'écran de
-  partage, ni le bouton « Partager », ni l'ouverture d'un lien `securenotes://s/…` dans
-  l'app n'ont été vus sur appareil.
-- Le déploiement sur Cloudflare Pages et les liens d'app / universels.
+Déploiement (14/11/2026) : migrations appliquées ; site sur Cloudflare Pages relié au
+dépôt GitHub (build à chaque push sur `main` : `npx expo export -p web`, dossier `dist`,
+variables `EXPO_PUBLIC_SUPABASE_*` et `NODE_VERSION`) ; sous-domaine
+`https://notes.mandallaz.fr` (CNAME OVH → `secure-notes-c80.pages.dev`), dans
+`.env.local` comme `EXPO_PUBLIC_SHARE_BASE_URL`.
 
-Reste à faire pour clore la phase :
-1. Appliquer les deux migrations sur l'instance.
-2. Choisir le sous-domaine, le mettre dans `.env.local`
-   (`EXPO_PUBLIC_SHARE_BASE_URL=https://notes.<domaine>`), créer le projet Cloudflare
-   Pages (commande de build `npx expo export -p web`, dossier `dist`, avec les variables
-   `EXPO_PUBLIC_SUPABASE_URL` et `EXPO_PUBLIC_SUPABASE_ANON_KEY`), CNAME dans la zone OVH.
-3. Liens d'app : ajouter `public/.well-known/assetlinks.json` (empreinte SHA-256 du
-   certificat de signature : `eas credentials -p android`) et
-   `public/.well-known/apple-app-site-association` (identifiant d'équipe Apple), puis
-   reconstruire l'app (le filtre d'intention est natif).
-4. Sur émulateur : partager, ouvrir le lien dans un navigateur sans compte, révoquer,
-   constater que le lien ne s'ouvre plus.
+**Critère de la phase vérifié** sur émulateur (Pixel_10) avec un coffre de test neuf :
+synchro activée, note créée, « Partager » → « Créer un lien » donne
+`https://notes.mandallaz.fr/s/<id>#<clé>` ; ouvert dans un navigateur sans compte, la
+note se déchiffre et s'affiche ; après « Révoquer », le même lien rechargé affiche « Ce
+lien n'existe plus ».
+
+Non vérifié :
+- L'ouverture d'un lien `https://…/s/…` directement dans l'app.
+- La liste Réglages → Partage → « Liens de partage ».
+
+Reste à faire :
+- Liens d'app : ajouter `public/.well-known/assetlinks.json` (empreinte SHA-256 du
+  certificat de signature : `eas credentials -p android`) et
+  `public/.well-known/apple-app-site-association` (identifiant d'équipe Apple), puis
+  reconstruire l'app (le filtre d'intention est natif).
+- `public/_headers` : la règle `/*` (`no-store`) s'ajoute à celle de `/_expo/*`, si bien
+  que les scripts ne sont jamais mis en cache.
 
 Limites connues :
 - Supprimer une note ne révoque pas ses liens (ils restent listés dans les réglages).
