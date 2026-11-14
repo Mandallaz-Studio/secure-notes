@@ -1,11 +1,10 @@
 # Secure Notes — plan de développement
 
 > Document de reprise pour les prochaines sessions. Dernière mise à jour : 2026-11-14.
-> État : **phases 0 à 5 terminées, phase 6 codée mais pas encore vérifiée de bout en bout**.
-> Prochaine étape : finir la vérification de la phase 6 (voir son bilan), puis phase 7.
-> À faire sur l'instance Supabase : appliquer `supabase/migrations/20261114000000_attachments.sql`
-> puis `20261115000000_sharing.sql`.
-> À fournir : le sous-domaine du site de lecture (`EXPO_PUBLIC_SHARE_BASE_URL` dans `.env.local`).
+> État : **phases 0 à 7 terminées** (v1 complète sur Android).
+> Reste à faire, hors phases : liens d'app (`assetlinks.json`, voir le bilan de la phase 6),
+> essais sur iOS, build de production (EAS).
+> Instance Supabase : migrations appliquées jusqu'à `20261116000100_items_quota.sql`.
 
 ## 1. Objectif
 
@@ -64,6 +63,13 @@ cloud optionnelle via Supabase. Le serveur ne doit jamais voir de données en cl
 
 | Copies partagées (phase 6) | Dans la table `shared_notes`, lues par la fonction `get_shared_note`, **pas dans Storage** | Un objet lisible sans compte serait soit dans un bucket public (mis en cache : révocation différée), soit énumérable par tous. La table n'est pas lisible publiquement, seule la lecture par identifiant l'est. Contrepartie : ces copies (4 Mo au plus chacune, images comprises) occupent la base ; elles comptent dans le quota |
 | Contenu d'un partage (phase 6) | Copie figée au moment du partage, images incluses, **sans les fichiers joints** ; plusieurs liens possibles par note | Révoquer = supprimer la copie. Mettre la copie à jour demanderait de garder la clé du lien modifiable côté serveur |
+| Format de l'export complet (phase 7) | **Archive zip** (bibliothèque `fflate`, pur JavaScript) proposée par la feuille de partage : une note Markdown par fichier, rangée par état puis catégorie, images et fichiers joints à part, plus `secure-notes.json` sans perte | Expo SDK 58 n'offre pas de choix de dossier documenté ; le zip passe partout (Fichiers, Drive, e-mail). Le JSON permettra un import futur |
+| Recréer le coffre (phase 7) | Le contenu de la base locale est recopié **par l'interface `NoteStore`** dans la base du nouveau coffre (pas par `sqlcipher_export`) ; refusé tant qu'une image ou un fichier n'est pas sur l'appareil | Code testable avec le stockage en mémoire, aucun état de synchro ne suit. L'ancien compte étant ensuite vidé, un contenu absent de l'appareil serait perdu |
+| Ancien compte après recréation (phase 7) | **Vidé puis fermé** (`profiles.closed_at`), pas supprimé de `auth.users` | Supprimé, il serait recréé par un autre appareil resté sur l'ancienne phrase (l'app crée le compte s'il n'existe pas). Fermé, il accepte la connexion mais refuse toute écriture, et l'app l'annonce |
+| Ordre du retrait (phase 7) | Nouvelle clé active d'abord ; l'ancien compte n'est fermé qu'**après** que le nouveau a tout reçu. La clé de l'ancien coffre attend dans le Keychain/Keystore (sans biométrie) jusqu'à la fin du retrait | Aucune fenêtre où les données n'existent nulle part sur le serveur ; chaque étape se rejoue après interruption |
+| Liens de partage après recréation (phase 7) | **Repris par le nouveau compte sous le même identifiant** (même copie chiffrée, métadonnées rechiffrées), si la synchro reste sur la même instance ; sinon révoqués | Les liens déjà envoyés continuent de fonctionner |
+| Quota (phase 7, revue de sécurité) | Les notes et catégories comptent aussi dans le quota de 50 Mo | L'inscription est ouverte à qui a la clé publique : sans cela, un compte pouvait remplir la base de notes |
+| Sauvegarde Android (phase 7) | `android.allowBackup: false` | Rien d'utile à sauvegarder (base chiffrée, clé non exportable) ; une app de ce type ne doit pas partir dans une sauvegarde |
 | Web (phase 6) | Sur le web, l'app ne montre que la route de lecture `/s/<id>` ; export en mode « single » (une page, routage côté navigateur) | Les routes dynamiques ne se pré-rendent pas en statique ; Cloudflare Pages sert `index.html` pour tout chemin inconnu |
 
 ### Encore ouvert
@@ -161,8 +167,8 @@ Chaque phase tient en principe en une session et se termine par un résultat vé
 - [x] Phase 3 — Éditeur
 - [x] Phase 4 — Synchro Supabase (voir « Bilan de la phase 4 »)
 - [x] Phase 5 — Pièces jointes et images (voir « Bilan de la phase 5 »)
-- [ ] Phase 6 — Partage par lien : codée, vérification de bout en bout en attente (voir « Bilan de la phase 6 »)
-- [ ] Phase 7 — Export, recréation de compte, finitions
+- [x] Phase 6 — Partage par lien (voir « Bilan de la phase 6 »)
+- [x] Phase 7 — Export, recréation de compte, revue de sécurité (voir « Bilan de la phase 7 »)
 
 ### Bilan de la phase 0 (terminée le 2026-11-13, sur Android et web)
 
@@ -533,7 +539,7 @@ Limites connues :
 - Supprimer un compte côté serveur laisse ses objets dans le bucket (à vider à la main).
 - Un fichier ouvert quitte le coffre **en clair** (copie supprimée après 2 minutes).
 
-### Bilan de la phase 6 (codée le 2026-11-14, vérification incomplète)
+### Bilan de la phase 6 (terminée le 2026-11-14, sur un émulateur Android et le site déployé)
 
 Fait :
 - **Serveur** (`supabase/migrations/20261115000000_sharing.sql`) : table `shared_notes`
@@ -606,6 +612,64 @@ Limites connues :
 - Un lien ouvert dans l'app émet une requête vers l'instance qu'il désigne, même
   synchronisation désactivée.
 
+### Bilan de la phase 7 (terminée le 2026-11-14, sur un émulateur Android)
+
+- **Export complet** (`src/notes/full-export.ts`, Réglages → Export) : archive
+  `secure-notes-AAAA-MM-JJ.zip` proposée par la feuille de partage, supprimée du cache
+  2 minutes après comme les autres exports. Contenu : `notes/`, `archives/`,
+  `corbeille/` (un dossier par catégorie, une note Markdown par fichier, homonymes
+  numérotés), `fichiers/` (images et fichiers joints, reliés depuis le Markdown),
+  `secure-notes.json` (tout, sans perte), `LISEZMOI.txt`. Les contenus pas encore
+  téléchargés sont comptés et signalés.
+- **Recréer le coffre** (`src/app/recreate.tsx`, Réglages → Coffre) : explication,
+  confirmation, nouvelle phrase (affichage unique et vérification, composant
+  `NewPhraseFlow` commun avec la création), puis `vault.recreate` : copie du contenu
+  dans la base du nouveau coffre (`notes/copy-store.ts`), enregistrement du retrait,
+  bascule de la clé. Refusé tant qu'un contenu manque sur l'appareil ou qu'un retrait
+  précédent n'est pas fini.
+- **Retrait de l'ancien coffre** (`src/vault/retire.ts`, lancé par la synchro) : attend
+  que le nouveau compte ait tout reçu, efface l'ancienne base locale, met de côté les
+  partages, supprime les fichiers de l'ancien compte, appelle `close_account()`, puis
+  recrée les partages sous le nouveau compte. Avancement affiché dans Réglages et sur
+  l'écran final ; reprise automatique à la synchro suivante en cas d'échec.
+- **Serveur** : `20261116000000_account_closure.sql` (`profiles.closed_at`,
+  `account_open()` dans les politiques d'écriture, `close_account()`),
+  `20261116000100_items_quota.sql` (notes et catégories dans le quota).
+- **Client** : un compte fermé refuse la connexion (`AccountClosedError`, message
+  invitant à restaurer avec la nouvelle phrase), sauf pour le ménage qui le ferme.
+- **Revue de sécurité** : pas de journalisation ; captures bloquées sur les écrans de
+  phrase ; jeton de session en mémoire seulement ; liens d'instance en HTTPS seulement ;
+  `npm audit` : seulement `minimatch` dans l'outillage de build d'Expo (non embarqué).
+  Corrigé : quota des notes, sauvegarde Android. Acceptés (voir limites) : inscription
+  ouverte, notes visibles dans l'aperçu des apps récentes.
+- 160 tests Jest (16 nouveaux) ; types et lint passent.
+
+Vérifié sur émulateur (coffre de test, instance réelle, migrations appliquées) :
+- export : archive proposée au partage, contenu (Markdown, JSON, lisez-moi) correct ;
+- recréation : 1 note recopiée, identifiant de compte changé, retrait terminé tout
+  seul après la première synchro (« 1 lien repris ») ; le lien créé avant la
+  recréation s'ouvre toujours dans un navigateur et figure dans « Liens de partage »
+  du nouveau compte ;
+- autre appareil resté sur l'ancienne phrase (simulé : coffre supprimé, ancienne phrase
+  restaurée) : aucune note, et la synchro affiche « Ce coffre a été remplacé… » ;
+- nouvelle phrase restaurée : la note revient du nouveau compte.
+
+Non vérifié :
+- un export avec images et fichiers joints sur appareil (couvert par Jest seulement) ;
+- la reprise d'un retrait interrompu (couverte par Jest seulement) ;
+- le refus d'écriture par quota sur une note (migration appliquée, chemin non provoqué).
+
+Limites connues :
+- Un lien repris porte la date de la recréation, pas celle de sa création.
+- Le compte fermé reste dans `auth.users` (vide) : à supprimer à la main seulement si
+  plus aucun appareil n'utilise l'ancienne phrase.
+- Le nouveau compte a le quota par défaut : un compte dont le quota avait été augmenté
+  doit être réaugmenté avant la recréation, sinon le retrait attend.
+- Inscription ouverte : toute personne ayant la clé publique de l'instance peut créer
+  des comptes de 50 Mo (limites de débit de Supabase Auth seulement).
+- Les notes restent visibles dans l'aperçu des apps récentes (seuls les écrans de
+  phrase bloquent les captures).
+
 ## 5. Points d'attention
 
 - **Dev build obligatoire** dès la phase 0 : libsodium natif et SQLCipher ne
@@ -616,7 +680,7 @@ Limites connues :
 - La phrase ne doit jamais être journalisée, ni placée dans un état persistant, ni
   capturable (bloquer les captures d'écran sur l'écran d'affichage si possible).
 - La recherche se fait en local sur les données déchiffrées ; aucun index côté serveur.
-- Le dossier n'est pas encore un dépôt git.
+- Émulateur : voir les notes de lancement ci-dessous (`Pour reprendre`).
 
 ## 6. Pour reprendre
 
@@ -624,3 +688,11 @@ Limites connues :
 2. Repérer la première phase non cochée dans « Suivi ».
 3. En fin de session : cocher la phase, noter ici les écarts par rapport au plan et
    toute nouvelle décision dans la section 2.
+
+Lancement sur l'émulateur `Pixel_10` (constaté le 2026-11-14) :
+- l'émulateur avec `-gpu swiftshader_indirect` (le rendu GPU plante : écran blanc) ;
+- Metro sur le port **8081** (configuration `expo-dev` de `.claude/launch.json`), puis
+  `adb reverse tcp:8081 tcp:8081` et ouverture de
+  `securenotes://expo-development-client/?url=http%3A%2F%2Flocalhost%3A8081` ;
+- après `expo prebuild`, recréer `android/local.properties` (`sdk.dir=…`) ; Gradle
+  avec `JAVA_HOME` et `ANDROID_HOME` définis, `-PreactNativeArchitectures=x86_64`.

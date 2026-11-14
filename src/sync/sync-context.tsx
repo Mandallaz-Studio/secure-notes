@@ -17,6 +17,11 @@ import {
   SupabaseRemote,
   SyncError,
 } from '@/sync/supabase';
+import { deriveVaultKeys } from '@/crypto/keys';
+import { fromHex } from '@/crypto/vectors';
+import { discardNoteStore } from '@/notes/store-manager';
+import { deleteRetiring, loadRetiring } from '@/vault/key-store';
+import { parseRetiring, retireVault, type RetireReport } from '@/vault/retire';
 import { useVault } from '@/vault/vault-context';
 
 export type SyncStatus = {
@@ -47,7 +52,18 @@ type SyncContextValue = {
   syncNow: () => void;
   /** Accès au serveur ; `null` si la synchronisation est désactivée ou le coffre verrouillé. */
   remote: SupabaseRemote | null;
+  /** Retrait de l'ancien coffre après « Recréer le coffre ». */
+  retirement: RetirementStatus;
+  retryRetirement: () => void;
 };
+
+export type RetirementStatus =
+  | { state: 'none' }
+  /** Le nouveau compte n'a pas encore tout reçu : l'ancien reste en place. */
+  | { state: 'waiting'; detail: string }
+  | { state: 'running' }
+  | { state: 'error'; error: string }
+  | { state: 'done'; report: RetireReport };
 
 /** Délai après une modification locale avant de l'envoyer. */
 const WRITE_DELAY_MS = 2_000;
@@ -203,6 +219,93 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     if (revision > 0) runner.current?.request(WRITE_DELAY_MS);
   }, [revision]);
 
+  // --- Retrait de l'ancien coffre ------------------------------------------
+  const [retirement, setRetirement] = useState<RetirementStatus>({ state: 'none' });
+  const [retryToken, setRetryToken] = useState(0);
+  const retiring = useRef(false);
+
+  useEffect(() => {
+    if (!keys || !store || retiring.current) return;
+    let cancelled = false;
+    (async () => {
+      const raw = await loadRetiring().catch(() => null);
+      if (cancelled) return;
+      if (!raw) return;
+      const record = parseRetiring(raw);
+      if (!record) {
+        await deleteRetiring();
+        return;
+      }
+      if (keys.accountId === record.accountId) {
+        // Recréation interrompue avant que le nouveau coffre devienne actif.
+        await discardNoteStore(record.successorId);
+        await deleteRetiring();
+        return;
+      }
+      if (keys.accountId !== record.successorId) return;
+
+      // Avant de fermer l'ancien compte, le nouveau doit avoir tout reçu.
+      if (remote) {
+        if (status.state !== 'idle') {
+          setRetirement({ state: 'waiting', detail: 'Envoi des notes au nouveau compte…' });
+          return;
+        }
+        const pending = (await store.listPending()).length;
+        const blobs = (await store.listBlobs()).filter(
+          (blob) => blob.referenced && blob.hasData && !blob.uploaded,
+        ).length;
+        if (cancelled) return;
+        if (pending > 0 || blobs > 0) {
+          setRetirement({
+            state: 'waiting',
+            detail:
+              status.overQuota > 0
+                ? `${status.overQuota} image(s) ou fichier(s) dépassent le quota du nouveau compte : faites-le augmenter sur l'instance.`
+                : `Envoi au nouveau compte en cours (${pending} note(s), ${blobs} fichier(s) restants).`,
+          });
+          return;
+        }
+      }
+
+      retiring.current = true;
+      setRetirement({ state: 'running' });
+      const oldMaster = fromHex(record.masterKey);
+      const oldKeys = deriveVaultKeys(oldMaster);
+      try {
+        const sameInstance = remote !== null && record.instance?.url === url;
+        const report = await retireVault({
+          deleteOldDatabase: () => discardNoteStore(record.accountId),
+          oldRemote: record.instance
+            ? new SupabaseRemote(
+                record.instance,
+                credentialsFor(oldKeys, record.instance.url),
+                fetch,
+                true,
+              )
+            : null,
+          oldWrapKey: oldKeys.wrapKey,
+          newRemote: sameInstance ? remote : null,
+          newWrapKey: keys.wrapKey,
+          store,
+        });
+        await deleteRetiring();
+        setRetirement({ state: 'done', report });
+      } catch (cause) {
+        setRetirement({ state: 'error', error: describe(cause) });
+      } finally {
+        oldMaster.fill(0);
+        oldKeys.wrapKey.fill(0);
+        oldKeys.databaseKey.fill(0);
+        retiring.current = false;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // `status` complet changerait à chaque début de synchronisation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keys, store, remote, url, status.lastSyncAt, status.state, retryToken]);
+
   const enable = async (inputUrl: string, inputKey: string) => {
     if (!keys) throw new SyncError('Le coffre doit être déverrouillé.');
     const instance = {
@@ -225,7 +328,16 @@ export function SyncProvider({ children }: { children: ReactNode }) {
 
   return (
     <SyncContext
-      value={{ config, status, enable, disable, syncNow: () => runner.current?.request(), remote }}>
+      value={{
+        config,
+        status,
+        enable,
+        disable,
+        syncNow: () => runner.current?.request(),
+        remote,
+        retirement,
+        retryRetirement: () => setRetryToken((token) => token + 1),
+      }}>
       {children}
     </SyncContext>
   );

@@ -4,12 +4,14 @@ import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { Button } from '@/components/button';
 import { confirmDestructive } from '@/components/confirm';
+import { RetirementNotice } from '@/components/retirement-notice';
 import { TextField } from '@/components/text-field';
 import { ThemedText } from '@/components/themed-text';
 import { NotePalette, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { formatBytes, newImageCache, toStoredImages } from '@/notes/blobs';
-import { markdownFilesSupported, pickTextFile } from '@/notes/markdown-files';
+import { buildFullExport, fullExportFileName } from '@/notes/full-export';
+import { markdownFilesSupported, pickTextFile, shareFile } from '@/notes/markdown-files';
 import { createNote, withBody, withTitle } from '@/notes/model';
 import { useNotes } from '@/notes/notes-context';
 import { submitNote } from '@/notes/pending-notes';
@@ -51,6 +53,8 @@ export default function SettingsScreen() {
       </View>
 
       {markdownFilesSupported && <ImportSection />}
+
+      {markdownFilesSupported && <ExportSection />}
 
       <SyncSection />
 
@@ -157,6 +161,14 @@ function VaultSection() {
         </ThemedText>
       )}
       {error && <ThemedText themeColor="danger">{error}</ThemedText>}
+      <ThemedText themeColor="textSecondary" type="small">
+        Phrase perdue, ou vue par quelqu&apos;un d&apos;autre ? Recréez le coffre : nouvelle phrase,
+        mêmes notes.
+      </ThemedText>
+      <Link href="/recreate" asChild>
+        <Button label="Recréer le coffre avec une nouvelle phrase" />
+      </Link>
+      <RetirementNotice />
       <Button label="Supprimer le coffre de cet appareil" variant="danger" onPress={destroy} />
     </View>
   );
@@ -214,6 +226,63 @@ function ImportSection() {
       {error && (
         <ThemedText themeColor="danger" type="small">
           {error}
+        </ThemedText>
+      )}
+    </View>
+  );
+}
+
+/** Export de tout le coffre, en clair, dans une archive zip. */
+function ExportSection() {
+  const { store } = useNotes();
+  const [busy, setBusy] = useState(false);
+  const [report, setReport] = useState<{ text: string; danger: boolean } | null>(null);
+
+  const exportAll = async () => {
+    if (!store) return;
+    const confirmed = await confirmDestructive({
+      title: 'Exporter toutes les notes en clair ?',
+      message:
+        "L'archive contient toutes vos notes, images et fichiers joints, non chiffrés : quiconque y accède peut les lire. Enregistrez-la en lieu sûr.",
+      confirmLabel: 'Exporter',
+    });
+    if (!confirmed) return;
+    setReport(null);
+    setBusy(true);
+    try {
+      const now = Date.now();
+      const result = await buildFullExport(store, now);
+      await shareFile(fullExportFileName(now), result.zip, 'application/zip', 'public.zip-archive');
+      setReport({
+        text:
+          `${result.notes} note(s) et ${result.files} fichier(s) exportés.` +
+          (result.missing > 0
+            ? ` ${result.missing} image(s) ou fichier(s) manquent : ils ne sont pas encore téléchargés sur cet appareil.`
+            : ''),
+        danger: result.missing > 0,
+      });
+    } catch (cause) {
+      setReport({ text: `L'export a échoué : ${String(cause)}`, danger: true });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <View style={styles.section}>
+      <ThemedText type="subtitle">Export</ThemedText>
+      <ThemedText themeColor="textSecondary" type="small">
+        Une archive zip avec toutes les notes (Markdown, rangées par catégorie), leurs images et
+        fichiers joints, et un fichier JSON qui conserve toute la mise en forme.
+      </ThemedText>
+      <Button
+        label={busy ? 'Préparation de l’archive…' : 'Exporter toutes les notes'}
+        disabled={!store || busy}
+        onPress={exportAll}
+      />
+      {report && (
+        <ThemedText themeColor={report.danger ? 'danger' : 'textSecondary'} type="small">
+          {report.text}
         </ThemedText>
       )}
     </View>

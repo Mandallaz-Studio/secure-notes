@@ -13,6 +13,7 @@ export async function shareFile(
   _name: string,
   _content: string | Uint8Array,
   _mimeType: string,
+  _UTI?: string,
 ): Promise<void> {
   throw new Error("L'export n'est pas disponible sur le web.");
 }

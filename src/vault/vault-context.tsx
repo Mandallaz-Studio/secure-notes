@@ -3,15 +3,21 @@ import { AppState } from 'react-native';
 
 import { cryptoReady } from '@/crypto/aead';
 import { deriveVaultKeys, masterKeyFromEntropy, type VaultKeys } from '@/crypto/keys';
-import { destroyNoteStore } from '@/notes/store-manager';
+import { toHex } from '@/crypto/vectors';
+import type { CopyReport } from '@/notes/copy-store';
+import { cloneNoteStore, destroyNoteStore, discardNoteStore } from '@/notes/store-manager';
 import { getPref, removePref, setPref } from '@/storage/prefs';
+import type { SyncInstance } from '@/sync/supabase';
 import {
   canUseBiometrics,
   deleteMasterKey,
+  deleteRetiring,
   isPersistent,
   loadMasterKey,
   saveMasterKey,
+  saveRetiring,
 } from '@/vault/key-store';
+import type { RetiringVault } from '@/vault/retire';
 
 /**
  * État du coffre :
@@ -38,6 +44,15 @@ type VaultContextValue = {
   setBiometricEnabled: (enabled: boolean) => Promise<void>;
   /** Efface la clé et les notes de cet appareil. Sans la phrase, elles sont perdues. */
   destroy: () => Promise<void>;
+  /**
+   * Remplace le coffre par un nouveau, tiré d'une nouvelle phrase : tout le
+   * contenu y est recopié, puis le nouveau coffre devient le coffre actif.
+   * L'ancien est ensuite retiré par la synchronisation (voir `retire.ts`).
+   * @param instance Instance où l'ancien compte est synchronisé, ou `null`.
+   * @throws si la copie ou l'enregistrement de la nouvelle clé échoue ; le
+   *   coffre actuel reste alors en place.
+   */
+  recreate: (entropy: Uint8Array, instance: SyncInstance | null) => Promise<CopyReport>;
 };
 
 // Marqueurs non secrets : ils permettent de savoir qu'un coffre existe sans
@@ -161,11 +176,47 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     setBiometricState(enabled);
   };
 
+  const recreate = async (entropy: Uint8Array, instance: SyncInstance | null) => {
+    const previous = masterKey.current;
+    if (!previous) {
+      throw new Error('Le coffre doit être déverrouillé pour être recréé.');
+    }
+    const previousId = deriveVaultKeys(previous).accountId;
+    const nextKey = masterKeyFromEntropy(entropy);
+    const next = deriveVaultKeys(nextKey);
+
+    const report = await cloneNoteStore(next);
+    const record: RetiringVault = {
+      accountId: previousId,
+      successorId: next.accountId,
+      masterKey: toHex(previous),
+      instance,
+    };
+    await saveRetiring(JSON.stringify(record));
+    try {
+      await saveMasterKey(nextKey, biometricEnabled);
+    } catch (error) {
+      // `saveMasterKey` efface l'ancienne entrée avant d'écrire : la remettre.
+      await saveMasterKey(previous, biometricEnabled).catch(() => saveMasterKey(previous, false));
+      await deleteRetiring();
+      await discardNoteStore(next.accountId);
+      nextKey.fill(0);
+      throw error;
+    }
+    if (isPersistent) {
+      setPref(PREF_ACCOUNT, next.accountId);
+    }
+    adopt(nextKey);
+    previous.fill(0);
+    return report;
+  };
+
   const destroy = async () => {
     // Les notes d'abord : sans la clé, la base resterait sur l'appareil, illisible.
     if (accountId) {
       await destroyNoteStore(accountId);
     }
+    await deleteRetiring();
     await deleteMasterKey();
     removePref(PREF_ACCOUNT);
     removePref(PREF_BIOMETRIC);
@@ -188,6 +239,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         lock,
         setBiometricEnabled,
         destroy,
+        recreate,
       }}>
       {children}
     </VaultContext>

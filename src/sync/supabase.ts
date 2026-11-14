@@ -35,6 +35,15 @@ const TOKEN_MARGIN_MS = 60_000;
 /** Erreur de synchronisation dont le message peut être montré tel quel. */
 export class SyncError extends Error {}
 
+/** Le compte a été fermé : le coffre a été recréé, avec une nouvelle phrase, sur un autre appareil. */
+export class AccountClosedError extends SyncError {
+  constructor() {
+    super(
+      'Ce coffre a été remplacé par un nouveau (nouvelle phrase de récupération) depuis un autre appareil : son compte est fermé et ne reçoit plus rien. Exportez au besoin les notes de cet appareil, puis supprimez ce coffre et restaurez le nouveau avec sa phrase.',
+    );
+  }
+}
+
 /**
  * Met l'adresse sous une forme unique (le mot de passe du compte en dépend).
  * @throws SyncError si l'adresse est inutilisable.
@@ -85,10 +94,15 @@ export class SupabaseRemote implements SyncRemote, BlobRemote {
   readonly instanceId: string;
   private session: { token: string; expiresAt: number; userId: string | null } | null = null;
 
+  /**
+   * @param allowClosed Accepter un compte fermé : seul le ménage qui le ferme
+   *   s'y connecte encore. Sinon la connexion échoue par AccountClosedError.
+   */
   constructor(
     private readonly instance: SyncInstance,
     private readonly credentials: SyncCredentials,
     private readonly fetchImpl: typeof fetch = fetch,
+    private readonly allowClosed = false,
   ) {
     this.instanceId = instance.url;
   }
@@ -163,7 +177,13 @@ export class SupabaseRemote implements SyncRemote, BlobRemote {
   async signIn(): Promise<void> {
     this.session = null;
     const login = await this.send('POST', '/auth/v1/token?grant_type=password', this.credentials);
-    if (this.adopt(login)) return;
+    if (this.adopt(login)) {
+      if (!this.allowClosed && (await this.isClosed())) {
+        this.session = null;
+        throw new AccountClosedError();
+      }
+      return;
+    }
     if (login.status === 401 || login.status === 403 || login.status === 404) {
       throw new SyncError(
         `L'instance a refusé la connexion (${SupabaseRemote.describe(login)}). Vérifiez l'adresse et la clé.`,
@@ -253,6 +273,12 @@ export class SupabaseRemote implements SyncRemote, BlobRemote {
   }
 
   private static fail(reply: Reply): never {
+    const message = ((reply.body ?? {}) as Json).message;
+    if (typeof message === 'string' && message.includes('storage_quota_exceeded')) {
+      throw new SyncError(
+        'Quota du compte atteint sur le serveur : les modifications restent sur cet appareil. Supprimez des fichiers joints, videz la corbeille, ou faites augmenter le quota du compte.',
+      );
+    }
     if (reply.status === 404) {
       throw new SyncError(
         "L'instance n'est pas à jour pour Secure Notes (table absente) : appliquez les migrations du dossier supabase/migrations.",
@@ -419,7 +445,9 @@ export class SupabaseRemote implements SyncRemote, BlobRemote {
    */
   async createShare(id: string, ciphertext: string, meta: string): Promise<void> {
     const reply = await this.rest('POST', '/shared_notes', { id, ciphertext, meta });
-    if (reply.status === 201) return;
+    // 409 : ce partage existe déjà. Un identifiant neuf (aléatoire) n'entre
+    // jamais en conflit ; c'est donc un transfert repris après interruption.
+    if (reply.status === 201 || reply.status === 409) return;
     const body = (reply.body ?? {}) as Json;
     if (typeof body.message === 'string' && body.message.includes('storage_quota_exceeded')) {
       throw new QuotaExceededError('Quota de stockage atteint');
@@ -447,6 +475,49 @@ export class SupabaseRemote implements SyncRemote, BlobRemote {
   async deleteShare(id: string): Promise<void> {
     const reply = await this.rest('DELETE', `/shared_notes?id=eq.${id}`);
     if (reply.status !== 204 && reply.status !== 200) SupabaseRemote.fail(reply);
+  }
+
+  /** Copie chiffrée d'un partage du compte ; `null` s'il n'existe plus. */
+  async getShareCiphertext(id: string): Promise<string | null> {
+    const reply = await this.rest('GET', `/shared_notes?id=eq.${id}&select=ciphertext`);
+    if (reply.status !== 200 || !Array.isArray(reply.body)) SupabaseRemote.fail(reply);
+    const row = reply.body[0] as Json | undefined;
+    return typeof row?.ciphertext === 'string' ? row.ciphertext : null;
+  }
+
+  // --- Fermeture du compte ---------------------------------------------------
+
+  /**
+   * Le compte de la session ouverte est-il fermé ? Lu sans passer par
+   * `authed` : appelé depuis `signIn`, il ne doit pas en relancer un.
+   * Une instance sans la migration de fermeture répond « non ».
+   */
+  private async isClosed(): Promise<boolean> {
+    const reply = await this.send('GET', '/rest/v1/profiles?select=closed_at', undefined, {
+      Authorization: `Bearer ${this.session?.token}`,
+    });
+    const row = Array.isArray(reply.body) ? (reply.body[0] as Json | undefined) : undefined;
+    return reply.status === 200 && typeof row?.closed_at === 'string';
+  }
+
+  /**
+   * Vide et ferme le compte (notes, fichiers, partages). Les blocs des
+   * fichiers doivent avoir été supprimés avant (`deleteAttachment`).
+   * Sans effet sur un compte déjà fermé.
+   */
+  async closeAccount(): Promise<void> {
+    const reply = await this.rest('POST', '/rpc/close_account', {});
+    if (reply.status === 204 || reply.status === 200) return;
+    const message = ((reply.body ?? {}) as Json).message;
+    if (typeof message === 'string' && message.includes('attachments_remaining')) {
+      throw new SyncError("Des fichiers de l'ancien compte restent sur le serveur : réessayez.");
+    }
+    if (reply.status === 404) {
+      throw new SyncError(
+        "L'instance n'est pas à jour pour Secure Notes (fermeture de compte absente) : appliquez les migrations du dossier supabase/migrations.",
+      );
+    }
+    SupabaseRemote.fail(reply);
   }
 
   async getUsage(): Promise<StorageUsage | null> {

@@ -14,6 +14,7 @@ import { QuotaExceededError } from '@/sync/blobs';
 import { openItem, sealDeletion, sealItem } from '@/sync/codec';
 import { synchronize, type RemoteRow, type SyncRemote } from '@/sync/engine';
 import {
+  AccountClosedError,
   credentialsFor,
   normalizeInstanceUrl,
   SupabaseRemote,
@@ -422,6 +423,46 @@ describe('compte de synchronisation', () => {
 
     expect(await remoteWith(impl).pull(0, 10)).toEqual([]);
     expect(logins).toBe(2);
+  });
+
+  it('refuse un compte fermé, sauf pour le ménage qui le ferme', async () => {
+    const { impl, calls } = fakeFetch((method, path) => {
+      if (path.startsWith('/auth')) return [200, { access_token: 'jeton' }];
+      if (path === '/rest/v1/profiles?select=closed_at') {
+        return [200, [{ closed_at: '2026-11-14T10:00:00Z' }]];
+      }
+      return [200, []];
+    });
+
+    await expect(remoteWith(impl).pull(0, 10)).rejects.toBeInstanceOf(AccountClosedError);
+    expect(calls.some((call) => call.path.startsWith('/rest/v1/items'))).toBe(false);
+
+    const cleaner = new SupabaseRemote(
+      { url: 'https://a.example', anonKey: 'anon' },
+      credentialsFor(keys(), 'https://a.example'),
+      impl,
+      true,
+    );
+    expect(await cleaner.pull(0, 10)).toEqual([]);
+  });
+
+  it('ferme le compte, ou explique pourquoi il ne peut pas l’être', async () => {
+    const closing = (status: number, body: unknown) =>
+      remoteWith(
+        fakeFetch((method, path) =>
+          path.startsWith('/auth')
+            ? [200, { access_token: 'jeton' }]
+            : path === '/rest/v1/rpc/close_account'
+              ? [status, body]
+              : [200, []],
+        ).impl,
+      ).closeAccount();
+
+    await expect(closing(204, null)).resolves.toBeUndefined();
+    await expect(closing(400, { message: 'attachments_remaining' })).rejects.toThrow(
+      /restent sur le serveur/,
+    );
+    await expect(closing(404, { message: 'not found' })).rejects.toThrow(/migrations/);
   });
 
   it('explique les échecs courants', async () => {

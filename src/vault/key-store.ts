@@ -44,3 +44,24 @@ export async function loadMasterKey(biometric: boolean): Promise<Uint8Array | nu
 export async function deleteMasterKey(): Promise<void> {
   await SecureStore.deleteItemAsync(KEY);
 }
+
+const RETIRING = 'vault.retiring';
+
+/**
+ * Ancien coffre en cours de retrait (voir `retire.ts`). Il contient sa clé
+ * maîtresse : il ne reste là que le temps de vider et fermer l'ancien compte,
+ * sans protection biométrique pour que ce ménage se fasse sans intervention.
+ */
+export async function saveRetiring(value: string): Promise<void> {
+  await SecureStore.setItemAsync(RETIRING, value, {
+    keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+  });
+}
+
+export async function loadRetiring(): Promise<string | null> {
+  return SecureStore.getItemAsync(RETIRING);
+}
+
+export async function deleteRetiring(): Promise<void> {
+  await SecureStore.deleteItemAsync(RETIRING);
+}

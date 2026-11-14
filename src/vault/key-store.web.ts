@@ -24,3 +24,17 @@ export async function deleteMasterKey(): Promise<void> {
   inMemory?.fill(0);
   inMemory = null;
 }
+
+let retiring: string | null = null;
+
+export async function saveRetiring(value: string): Promise<void> {
+  retiring = value;
+}
+
+export async function loadRetiring(): Promise<string | null> {
+  return retiring;
+}
+
+export async function deleteRetiring(): Promise<void> {
+  retiring = null;
+}
