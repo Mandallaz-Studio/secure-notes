@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.mandallazstudio.securenotes",
+      "sha256_cert_fingerprints": [
+        "4A:90:DE:55:31:E3:87:6F:E8:9A:15:BF:5A:C8:54:08:D6:35:02:47:87:ED:22:BD:AC:DA:95:DE:09:DC:F1:CC"
+      ]
+    }
+  }
+]

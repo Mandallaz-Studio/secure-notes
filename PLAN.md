@@ -2,8 +2,8 @@
 
 > Document de reprise pour les prochaines sessions. Dernière mise à jour : 2026-11-14.
 > État : **phases 0 à 7 terminées** (v1 complète sur Android).
-> Reste à faire, hors phases : liens d'app (`assetlinks.json`, voir le bilan de la phase 6),
-> essais sur iOS, build de production (EAS).
+> Liens d'app Android en place (voir « Liens d'app » ci-dessous) ; reste : liens universels
+> iOS, essais sur iOS, build de production (EAS).
 > Instance Supabase : migrations appliquées jusqu'à `20261116000100_items_quota.sql`.
 
 ## 1. Objectif
@@ -669,6 +669,25 @@ Limites connues :
   des comptes de 50 Mo (limites de débit de Supabase Auth seulement).
 - Les notes restent visibles dans l'aperçu des apps récentes (seuls les écrans de
   phrase bloquent les captures).
+
+### Liens d'app Android (2026-11-14)
+
+- Les liens `https://notes.mandallaz.fr/s/…` s'ouvrent dans l'app quand elle est
+  installée : filtre d'intention vérifié (`app.config.js`) et
+  `public/.well-known/assetlinks.json`, servi par le site.
+- Signature : les builds release locaux sont signés par une **clé propre à l'app**
+  (plugin `plugins/with-release-signing.js`), et non plus par la clé de débogage de
+  React Native, publique. Clé : `~/.android/secure-notes-release.keystore` ; mots de
+  passe dans `~/.gradle/gradle.properties` (propriétés `SECURE_NOTES_RELEASE_*`), hors du
+  dépôt. **À sauvegarder** : sans elle, impossible de mettre à jour l'app installée sans
+  la désinstaller, ni de garder les liens vérifiés.
+- Empreinte SHA-256 déclarée dans `assetlinks.json` :
+  `4A:90:DE:55:…:DC:F1:CC`. Un build EAS (autre clé) devra y ajouter la sienne
+  (`eas credentials -p android`).
+- Build release pour un téléphone : `./gradlew app:assembleRelease
+  -PreactNativeArchitectures=arm64-v8a` dans `android/`.
+- Vérifié : sur émulateur (build de débogage, lien forcé vers l'app), le lien ouvre la
+  note partagée dans l'app.
 
 ## 5. Points d'attention
 
