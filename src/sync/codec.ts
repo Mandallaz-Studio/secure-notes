@@ -7,6 +7,7 @@ import {
   utf8Decode,
   utf8Encode,
 } from '@/crypto/aead';
+import { padJson } from '@/crypto/padding';
 import type {
   Attachment,
   BodyFormat,
@@ -20,9 +21,11 @@ import type {
  * Forme chiffrée d'un élément envoyé au serveur.
  *
  * Chaque envoi tire une clé aléatoire, chiffrée par la clé d'enveloppe du
- * compte. Le serveur ne peut distinguer ni une note d'une catégorie, ni une
- * modification d'une suppression définitive, ni lire titre, contenu, catégorie
- * ou état : tout est dans le blob.
+ * compte. Le serveur ne peut lire ni titre, ni contenu, ni catégorie, ni état :
+ * tout est dans le blob. Le texte clair est bourré (voir `padding.ts`) à
+ * 1 Kio au moins, puis par paliers : le serveur ne distingue donc pas une
+ * suppression, une catégorie ou une courte note, et ne connaît la longueur
+ * d'une note longue qu'à environ 12 % près.
  *
  * Une suppression est donc elle aussi un message chiffré : sans la clé du
  * compte, personne — pas même le serveur — ne peut faire supprimer un élément
@@ -38,6 +41,14 @@ export type SealedItem = { ciphertext: string; wrappedKey: string };
 const VERSION = 1;
 const keyContext = (id: string) => `sn1:key:${id}`;
 const itemContext = (id: string) => `sn1:item:${id}`;
+
+/** Taille minimale d'un texte clair, après bourrage. */
+const MIN_PLAIN_BYTES = 1024;
+/**
+ * Le bourrage ne fait jamais dépasser la limite du serveur (`items_size` :
+ * 4 000 000 caractères base64, soit 3 000 000 octets chiffrés).
+ */
+const MAX_PADDED_BYTES = 2_999_000;
 
 type Payload =
   | {
@@ -80,7 +91,13 @@ function seal(id: string, payload: Payload, wrapKey: Uint8Array): SealedItem {
   try {
     return {
       wrappedKey: toBase64(encrypt(itemKey, wrapKey, keyContext(id))),
-      ciphertext: toBase64(encrypt(utf8Encode(JSON.stringify(payload)), itemKey, itemContext(id))),
+      ciphertext: toBase64(
+        encrypt(
+          padJson(utf8Encode(JSON.stringify(payload)), MIN_PLAIN_BYTES, MAX_PADDED_BYTES),
+          itemKey,
+          itemContext(id),
+        ),
+      ),
     };
   } finally {
     itemKey.fill(0);

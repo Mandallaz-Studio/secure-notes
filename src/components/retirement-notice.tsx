@@ -27,13 +27,20 @@ export function RetirementNotice() {
         </Notice>
       );
     case 'done': {
-      const { sharesMoved, sharesRevoked } = retirement.report;
+      const { sharesMoved, sharesRevoked, sharesTaken } = retirement.report;
       return (
-        <Notice tone="success" title="Ancien coffre retiré">
-          Son compte est vidé et fermé.
-          {sharesMoved > 0 && ` ${sharesMoved} lien(s) de partage repris par le nouveau compte.`}
-          {sharesRevoked > 0 && ` ${sharesRevoked} lien(s) de partage révoqué(s).`}
-        </Notice>
+        <>
+          <Notice tone="success" title="Ancien coffre retiré">
+            Son compte est vidé et fermé.
+            {sharesMoved > 0 && ` ${sharesMoved} lien(s) de partage repris par le nouveau compte.`}
+            {sharesRevoked > 0 && ` ${sharesRevoked} lien(s) de partage révoqué(s).`}
+          </Notice>
+          {sharesTaken > 0 && (
+            <Notice tone="danger" title="Liens de partage détournés">
+              {`${sharesTaken} lien(s) ont été repris par un autre compte pendant le transfert : ils n’affichent plus votre note mais un contenu que vous ne contrôlez pas. Prévenez leurs destinataires de ne plus s’y fier.`}
+            </Notice>
+          )}
+        </>
       );
     }
   }

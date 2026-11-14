@@ -17,7 +17,7 @@ import {
   ShareError,
   type SharedNote,
 } from '@/share/codec';
-import { fetchSharedNote, SupabaseRemote, SyncError } from '@/sync/supabase';
+import { fetchSharedNote, ShareTakenError, SupabaseRemote, SyncError } from '@/sync/supabase';
 
 beforeAll(async () => {
   await cryptoReady();
@@ -190,6 +190,25 @@ describe('serveur', () => {
     );
   });
 
+  it('refuse une réponse démesurée, annoncée ou non', async () => {
+    const id = newId();
+    const huge = 'x'.repeat(8_100_000);
+    await expect(fetchSharedNote(instance, id, fakeFetch(() => [200, huge]).impl)).rejects.toThrow(
+      'trop volumineuse',
+    );
+    let read = false;
+    const announced = (async () => ({
+      status: 200,
+      headers: { get: (name: string) => (name === 'content-length' ? '900000000' : null) },
+      text: async () => {
+        read = true;
+        return '""';
+      },
+    })) as unknown as typeof fetch;
+    await expect(fetchSharedNote(instance, id, announced)).rejects.toThrow('trop volumineuse');
+    expect(read).toBe(false);
+  });
+
   it('crée, liste et révoque un partage avec la session du compte', async () => {
     const rows: Record<string, unknown>[] = [];
     const { impl, calls } = fakeFetch(({ method, path, body }) => {
@@ -215,5 +234,19 @@ describe('serveur', () => {
     expect(calls.map((call) => `${call.method} ${call.path}`)).toContain(
       'DELETE /rest/v1/shared_notes?id=eq.s1',
     );
+  });
+
+  it('distingue un partage déjà déposé par ce compte d’un identifiant pris par un autre', async () => {
+    // Ligne visible du compte (RLS) pour `s1` seulement ; `s2` appartient à un autre compte.
+    const { impl } = fakeFetch(({ method, path }) => {
+      if (path.startsWith('/auth')) return [200, { access_token: 'jeton', user: { id: 'moi' } }];
+      if (method === 'POST') return [409, { code: '23505' }];
+      return [200, path.includes('id=eq.s1') ? [{ ciphertext: 'chiffré' }] : []];
+    });
+    const remote = new SupabaseRemote(instance, { email: 'e', password: 'p' }, impl);
+
+    await expect(remote.createShare('s1', 'chiffré', 'méta')).resolves.toBeUndefined();
+    await expect(remote.createShare('s1', 'autre copie', 'méta')).rejects.toThrow(ShareTakenError);
+    await expect(remote.createShare('s2', 'chiffré', 'méta')).rejects.toThrow(ShareTakenError);
   });
 });

@@ -183,6 +183,12 @@ export class SqliteNoteStore implements NoteStore {
   static async open(accountId: string, databaseKey: Uint8Array): Promise<SqliteNoteStore> {
     const db = await SQLite.openDatabaseAsync(databaseName(accountId));
     try {
+      // Sans SQLCipher (option `useSQLCipher` perdue dans un build), `PRAGMA key`
+      // serait ignoré sans erreur et la base écrite en clair : on refuse.
+      const cipher = await db.getFirstAsync<{ cipher_version: string }>('PRAGMA cipher_version;');
+      if (!cipher?.cipher_version) {
+        throw new Error('SQLCipher absent de ce build : base chiffrée impossible, ouverture refusée.');
+      }
       // Clé brute en hexadécimal : SQLCipher ne la re-dérive pas (elle est déjà
       // issue d'une dérivation de clé).
       await db.execAsync(`PRAGMA key = "x'${toHex(databaseKey)}'";`);

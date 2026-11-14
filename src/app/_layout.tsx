@@ -12,10 +12,12 @@ import {
 import { useFonts } from 'expo-font';
 import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { useEffect } from 'react';
 import { Platform } from 'react-native';
 
 import { Colors, FontFiles, Type } from '@/constants/theme';
 import { NotesProvider } from '@/notes/notes-context';
+import { applySavedAppPrivacy } from '@/security/app-privacy';
 import { SyncProvider } from '@/sync/sync-context';
 import { ThemePreferenceProvider, useThemePreference } from '@/theme/theme-preference';
 import { useVault, VaultProvider } from '@/vault/vault-context';
@@ -27,6 +29,10 @@ import { useVault, VaultProvider } from '@/vault/vault-context';
 const READER_ONLY = Platform.OS === 'web';
 
 export default function RootLayout() {
+  // Au montage, l'activité Android existe : avant, le réglage n'aurait aucun
+  // effet. L'écran de verrouillage est lui aussi couvert.
+  useEffect(applySavedAppPrivacy, []);
+
   return (
     <ThemePreferenceProvider>
       <VaultProvider>

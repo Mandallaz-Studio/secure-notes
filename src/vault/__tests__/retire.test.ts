@@ -3,7 +3,7 @@ import { MemoryNoteStore } from '@/notes/memory-store';
 import { newId } from '@/notes/model';
 import { openShareMeta, sealShareMeta, type ShareMeta } from '@/share/codec';
 import { QuotaExceededError } from '@/sync/blobs';
-import type { RemoteShare } from '@/sync/supabase';
+import { ShareTakenError, type RemoteShare } from '@/sync/supabase';
 import { parseRetiring, PENDING_SHARES, retireVault, type RetireDeps } from '@/vault/retire';
 
 beforeAll(async () => {
@@ -30,6 +30,9 @@ function oldAccount(oldWrapKey: Uint8Array, shareCount: number) {
       log.push(`ciphertext ${id}`);
       return `copie-${id}`;
     },
+    deleteShare: async (id) => {
+      log.push(`unshare ${id}`);
+    },
     listAttachmentIds: async () => {
       log.push('listAttachmentIds');
       return attachments;
@@ -49,13 +52,16 @@ function oldAccount(oldWrapKey: Uint8Array, shareCount: number) {
 
 function newAccount(quotaShares = Infinity) {
   const created: { id: string; ciphertext: string; meta: string }[] = [];
+  /** Identifiants déjà pris par un autre compte. */
+  const taken = new Set<string>();
   const remote: NonNullable<RetireDeps['newRemote']> = {
     createShare: async (id, ciphertext, meta) => {
+      if (taken.has(id)) throw new ShareTakenError();
       if (created.length >= quotaShares) throw new QuotaExceededError('quota');
       created.push({ id, ciphertext, meta });
     },
   };
-  return { remote, created };
+  return { remote, created, taken };
 }
 
 function setup(shareCount: number, options: { synced?: boolean; quotaShares?: number } = {}) {
@@ -84,12 +90,15 @@ describe('retrait de l’ancien coffre', () => {
 
     const report = await retireVault(deps);
 
-    expect(report).toEqual({ sharesMoved: 2, sharesRevoked: 0 });
+    expect(report).toEqual({ sharesMoved: 2, sharesRevoked: 0, sharesTaken: 0 });
     expect(deleted()).toBe(1);
+    // Chaque lien est transféré seul, avant la fermeture de l'ancien compte.
     expect(old.log).toEqual([
       'listShares',
       `ciphertext ${old.shares[0].id}`,
       `ciphertext ${old.shares[1].id}`,
+      `unshare ${old.shares[0].id}`,
+      `unshare ${old.shares[1].id}`,
       'listAttachmentIds',
       'delete f1',
       'delete f2',
@@ -111,16 +120,50 @@ describe('retrait de l’ancien coffre', () => {
     old.failNextClose(true);
 
     await expect(retireVault(deps)).rejects.toThrow('réseau');
-    expect(next.created).toEqual([]);
+    expect(next.created).toHaveLength(2);
 
     old.failNextClose(false);
     old.log.length = 0;
     const report = await retireVault(deps);
 
-    expect(report.sharesMoved).toBe(2);
-    // La liste des partages n'est pas relue : l'ancien compte a pu les perdre.
-    expect(old.log).not.toContain('listShares');
+    // Liens déjà transférés : ils ne sont ni relus ni recréés.
+    expect(report.sharesMoved).toBe(0);
+    expect(old.log).toEqual(['listAttachmentIds', 'close']);
     expect(next.created).toHaveLength(2);
+  });
+
+  it('reprend un transfert interrompu entre la suppression et la recréation d’un lien', async () => {
+    const { deps, old, next, store } = setup(2);
+    const create = next.remote.createShare;
+    let calls = 0;
+    next.remote.createShare = async (...args) => {
+      calls += 1;
+      if (calls === 2) throw new Error('réseau');
+      return create(...args);
+    };
+
+    await expect(retireVault(deps)).rejects.toThrow('réseau');
+    expect(next.created).toHaveLength(1);
+    expect(old.log).not.toContain('close');
+    expect(JSON.parse((await store.getSyncValue(PENDING_SHARES)) ?? '[]')).toHaveLength(1);
+
+    old.log.length = 0;
+    const report = await retireVault(deps);
+
+    expect(report.sharesMoved).toBe(1);
+    expect(old.log).toEqual([`unshare ${old.shares[1].id}`, 'listAttachmentIds', 'delete f1', 'delete f2', 'close']);
+    expect(next.created.map((share) => share.id)).toEqual(old.shares.map((share) => share.id));
+  });
+
+  it('signale un lien dont l’identifiant a été pris par un autre compte', async () => {
+    const { deps, old, next } = setup(2);
+    next.taken.add(old.shares[0].id);
+
+    const report = await retireVault(deps);
+
+    expect(report).toEqual({ sharesMoved: 1, sharesRevoked: 0, sharesTaken: 1 });
+    expect(next.created.map((share) => share.id)).toEqual([old.shares[1].id]);
+    expect(old.log).toContain('close');
   });
 
   it('révoque les liens si le nouveau coffre n’est pas synchronisé sur la même instance', async () => {
@@ -128,7 +171,7 @@ describe('retrait de l’ancien coffre', () => {
 
     const report = await retireVault(deps);
 
-    expect(report).toEqual({ sharesMoved: 0, sharesRevoked: 3 });
+    expect(report).toEqual({ sharesMoved: 0, sharesRevoked: 3, sharesTaken: 0 });
     expect(old.log.some((line) => line.startsWith('ciphertext'))).toBe(false);
     expect(old.log).toContain('close');
     expect(next.created).toEqual([]);
@@ -137,7 +180,7 @@ describe('retrait de l’ancien coffre', () => {
   it('révoque les liens qui ne tiennent plus dans le quota du nouveau compte', async () => {
     const { deps, next } = setup(3, { quotaShares: 1 });
 
-    expect(await retireVault(deps)).toEqual({ sharesMoved: 1, sharesRevoked: 2 });
+    expect(await retireVault(deps)).toEqual({ sharesMoved: 1, sharesRevoked: 2, sharesTaken: 0 });
     expect(next.created).toHaveLength(1);
   });
 
@@ -147,6 +190,7 @@ describe('retrait de l’ancien coffre', () => {
     expect(await retireVault({ ...deps, oldRemote: null })).toEqual({
       sharesMoved: 0,
       sharesRevoked: 0,
+      sharesTaken: 0,
     });
     expect(deleted()).toBe(1);
     expect(old.log).toEqual([]);

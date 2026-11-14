@@ -2,6 +2,7 @@ import { useRouter } from 'expo-router';
 import {
   CloudOff,
   Download,
+  EyeOff,
   FlaskConical,
   Fingerprint,
   KeyRound,
@@ -25,6 +26,7 @@ import { ListGroup, ListItem, ListRow } from '@/components/list-group';
 import { Notice } from '@/components/notice';
 import { ProgressBar } from '@/components/progress-bar';
 import { RetirementNotice } from '@/components/retirement-notice';
+import { appPrivacySupported, getHideInRecents, setHideInRecents } from '@/security/app-privacy';
 import { SegmentedControl, type SegmentedOption } from '@/components/segmented-control';
 import { TextField } from '@/components/text-field';
 import { ThemedText } from '@/components/themed-text';
@@ -152,6 +154,7 @@ function VaultSection() {
   const router = useRouter();
   const vault = useVault();
   const [error, setError] = useState<string | null>(null);
+  const [hideInRecents, setHideState] = useState(getHideInRecents);
 
   const toggleBiometric = async () => {
     setError(null);
@@ -161,6 +164,36 @@ function VaultSection() {
       setError("La protection n'a pas pu être modifiée (authentification annulée ?).");
     }
   };
+
+  const toggleDeviceLock = async () => {
+    setError(null);
+    try {
+      if (!(await vault.setDeviceLockEnabled(!vault.deviceLockEnabled))) {
+        setError('Verrouillage inchangé : authentification annulée.');
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
+  const toggleHideInRecents = async () => {
+    setError(null);
+    try {
+      await setHideInRecents(!hideInRecents);
+      setHideState(!hideInRecents);
+    } catch {
+      setError('Le masquage n’a pas pu être modifié.');
+    }
+  };
+
+  const switchProps = (label: string, value: boolean, onToggle: () => Promise<void>) => ({
+    accessibilityLabel: label,
+    value,
+    onValueChange: () => void onToggle(),
+    trackColor: { true: theme.accent, false: theme.surfaceSunken },
+    thumbColor: value ? theme.onAccent : theme.surface,
+    ios_backgroundColor: theme.surfaceSunken,
+  });
 
   return (
     <>
@@ -173,12 +206,7 @@ function VaultSection() {
             label="Verrouillage biométrique"
             trailing={
               <Switch
-                accessibilityLabel="Verrouillage biométrique"
-                value={vault.biometricEnabled}
-                onValueChange={() => void toggleBiometric()}
-                trackColor={{ true: theme.accent, false: theme.surfaceSunken }}
-                thumbColor={vault.biometricEnabled ? theme.onAccent : theme.surface}
-                ios_backgroundColor={theme.surfaceSunken}
+                {...switchProps('Verrouillage biométrique', vault.biometricEnabled, toggleBiometric)}
               />
             }
           />
@@ -189,8 +217,39 @@ function VaultSection() {
             detail="Indisponible : aucune empreinte ni visage enregistré sur cet appareil."
           />
         )}
-        {vault.biometricAvailable && vault.biometricEnabled && (
+        {!vault.biometricEnabled &&
+          (vault.deviceLockAvailable || vault.deviceLockEnabled ? (
+            <ListRow
+              icon={LockKeyhole}
+              label="Verrouillage par code"
+              detail="Code, schéma, empreinte ou visage de l’appareil, au démarrage et après 30 s en arrière-plan."
+              trailing={
+                <Switch
+                  {...switchProps('Verrouillage par code', vault.deviceLockEnabled, toggleDeviceLock)}
+                />
+              }
+            />
+          ) : (
+            <ListRow
+              icon={LockKeyhole}
+              label="Verrouillage par code"
+              detail="Indisponible : aucun verrouillage d’écran sur cet appareil."
+            />
+          ))}
+        {vault.lockable && (
           <ListRow icon={Lock} label="Verrouiller maintenant" tone="accent" onPress={vault.lock} />
+        )}
+        {appPrivacySupported && (
+          <ListRow
+            icon={EyeOff}
+            label="Masquer dans les apps récentes"
+            detail="Aperçu masqué dans le sélecteur d’apps ; captures et enregistrements d’écran bloqués."
+            trailing={
+              <Switch
+                {...switchProps('Masquer dans les apps récentes', hideInRecents, toggleHideInRecents)}
+              />
+            }
+          />
         )}
         <ListRow
           icon={KeyRound}

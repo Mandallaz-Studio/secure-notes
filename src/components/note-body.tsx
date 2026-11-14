@@ -30,6 +30,7 @@ import {
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import type { NoteBodyProps } from '@/components/note-body.types';
+import { editorNavigationGuard } from '@/components/editor-navigation';
 import { Icon } from '@/components/icon';
 import { IconButton } from '@/components/icon-button';
 import { ThemedText } from '@/components/themed-text';
@@ -232,7 +233,7 @@ function Editor({ prepared, images, store, editable, onChange, ref }: EditorProp
   return (
     <View style={styles.container}>
       <View style={styles.editor}>
-        <RichText editor={editor} />
+        <RichText editor={editor} {...editorNavigationGuard} />
       </View>
       {imageError && (
         <ThemedText themeColor="danger" type="callout" style={styles.error}>

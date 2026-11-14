@@ -1,7 +1,7 @@
 import { openShareMeta, sealShareMeta } from '@/share/codec';
 import type { NoteStore } from '@/notes/types';
 import { QuotaExceededError } from '@/sync/blobs';
-import type { SupabaseRemote, SyncInstance } from '@/sync/supabase';
+import { ShareTakenError, type SupabaseRemote, type SyncInstance } from '@/sync/supabase';
 
 /**
  * Retrait de l'ancien coffre, après « Recréer le coffre ».
@@ -11,6 +11,13 @@ import type { SupabaseRemote, SyncInstance } from '@/sync/supabase';
  * fermer sur le serveur. Ses liens de partage passent au nouveau compte sous
  * le même identifiant (ils continuent de fonctionner), si celui-ci est
  * synchronisé sur la même instance ; sinon ils sont révoqués.
+ *
+ * Les destinataires d'un lien en connaissent l'identifiant et la clé : entre
+ * la suppression d'un partage par l'ancien compte et sa recréation par le
+ * nouveau, l'un d'eux pourrait déposer sa propre copie sous cet identifiant.
+ * Chaque partage est donc transféré seul, suppression puis recréation
+ * aussitôt, avant de fermer l'ancien compte ; un identifiant pris entre-temps
+ * est détecté (`ShareTakenError`) et signalé.
  *
  * Chaque étape peut être rejouée : une interruption (réseau, app fermée) se
  * reprend au prochain essai.
@@ -50,7 +57,12 @@ export function parseRetiring(raw: string): RetiringVault | null {
 
 type OldRemote = Pick<
   SupabaseRemote,
-  'listShares' | 'getShareCiphertext' | 'listAttachmentIds' | 'deleteAttachment' | 'closeAccount'
+  | 'listShares'
+  | 'getShareCiphertext'
+  | 'deleteShare'
+  | 'listAttachmentIds'
+  | 'deleteAttachment'
+  | 'closeAccount'
 >;
 type NewRemote = Pick<SupabaseRemote, 'createShare'>;
 
@@ -72,6 +84,8 @@ export type RetireReport = {
   sharesMoved: number;
   /** Liens révoqués (nouveau compte non synchronisé, ou quota atteint). */
   sharesRevoked: number;
+  /** Liens dont l'identifiant a été pris par un autre compte pendant le transfert. */
+  sharesTaken: number;
 };
 
 type PendingShare = { id: string; ciphertext: string; meta: string };
@@ -84,7 +98,7 @@ type PendingShare = { id: string; ciphertext: string; meta: string };
 export const PENDING_SHARES = 'retire.shares';
 
 export async function retireVault(deps: RetireDeps): Promise<RetireReport> {
-  const report: RetireReport = { sharesMoved: 0, sharesRevoked: 0 };
+  const report: RetireReport = { sharesMoved: 0, sharesRevoked: 0, sharesTaken: 0 };
   await deps.deleteOldDatabase();
   const old = deps.oldRemote;
   if (!old) return report;
@@ -113,27 +127,31 @@ export async function retireVault(deps: RetireDeps): Promise<RetireReport> {
     await deps.store.setSyncValue(PENDING_SHARES, JSON.stringify(pending));
   }
 
-  // 2. Supprimer les fichiers (blocs du bucket, puis lignes), puis fermer le compte.
-  for (const id of await old.listAttachmentIds()) await old.deleteAttachment(id);
-  await old.closeAccount();
-
-  // 3. Recréer les partages sous le nouveau compte, avec le même identifiant.
+  // 2. Transférer les partages un par un, tant que l'ancien compte est ouvert.
   if (deps.newRemote) {
     while (pending.length > 0) {
       const share = pending[0];
+      // Sans effet si l'ancien compte l'a déjà supprimé (reprise après interruption).
+      await old.deleteShare(share.id);
       try {
         await deps.newRemote.createShare(share.id, share.ciphertext, share.meta);
         report.sharesMoved += 1;
       } catch (cause) {
-        if (!(cause instanceof QuotaExceededError)) throw cause;
-        report.sharesRevoked += 1;
+        if (cause instanceof ShareTakenError) report.sharesTaken += 1;
+        else if (cause instanceof QuotaExceededError) report.sharesRevoked += 1;
+        else throw cause;
       }
       pending = pending.slice(1);
       await deps.store.setSyncValue(PENDING_SHARES, JSON.stringify(pending));
     }
   } else {
+    // Révoqués par la fermeture du compte.
     report.sharesRevoked += pending.length;
   }
+
+  // 3. Supprimer les fichiers (blocs du bucket, puis lignes), puis fermer le compte.
+  for (const id of await old.listAttachmentIds()) await old.deleteAttachment(id);
+  await old.closeAccount();
   await deps.store.setSyncValue(PENDING_SHARES, '[]');
   return report;
 }

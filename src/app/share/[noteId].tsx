@@ -1,4 +1,3 @@
-import * as Clipboard from 'expo-clipboard';
 import { Stack, useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Share, StyleSheet, View } from 'react-native';
@@ -25,6 +24,7 @@ import {
   ShareError,
 } from '@/share/codec';
 import { instanceForLink, SHARE_LINK_BASE, SHARE_SITE } from '@/share/config';
+import { copySensitive } from '@/security/secret-clipboard';
 import { QuotaExceededError } from '@/sync/blobs';
 import { useSync } from '@/sync/sync-context';
 import { SyncError } from '@/sync/supabase';
@@ -146,7 +146,8 @@ export default function ShareScreen() {
   };
 
   const copy = async (row: ShareRow) => {
-    await Clipboard.setStringAsync(row.link);
+    // Le lien contient la clé de la note.
+    await copySensitive(row.link);
     setCopied(row.id);
   };
 

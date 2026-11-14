@@ -1,4 +1,4 @@
-import { Fingerprint } from 'lucide-react-native';
+import { Fingerprint, LockKeyhole } from 'lucide-react-native';
 import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
@@ -9,20 +9,23 @@ import { Notice } from '@/components/notice';
 import { Screen } from '@/components/screen';
 import { ThemedText } from '@/components/themed-text';
 import { Spacing } from '@/constants/theme';
-import { useVault } from '@/vault/vault-context';
+import { useVault, type UnlockResult } from '@/vault/vault-context';
+
+type Failure = Exclude<UnlockResult, 'ok'>;
 
 export default function LockScreen() {
-  const { unlock, destroy } = useVault();
-  const [failed, setFailed] = useState(false);
+  const { unlock, destroy, biometricEnabled, keyUnreadable } = useVault();
+  // Clé illisible au démarrage : on le dit d'emblée, sans attendre un essai.
+  const [failure, setFailure] = useState<Failure | null>(keyUnreadable ? 'unreadable' : null);
   const [busy, setBusy] = useState(false);
 
   const tryUnlock = async () => {
     setBusy(true);
-    const ok = await unlock();
+    const result = await unlock();
     // En cas de succès, cet écran est remplacé par l'app.
-    if (!ok) {
+    if (result !== 'ok') {
       setBusy(false);
-      setFailed(true);
+      setFailure(result);
     }
   };
 
@@ -44,13 +47,13 @@ export default function LockScreen() {
       footer={
         <View style={styles.block}>
           <Button
-            label="Déverrouiller"
-            icon={Fingerprint}
+            label={failure === 'unreadable' ? 'Réessayer' : 'Déverrouiller'}
+            icon={biometricEnabled ? Fingerprint : LockKeyhole}
             variant="primary"
             disabled={busy}
             onPress={tryUnlock}
           />
-          {failed && (
+          {failure !== null && (
             <Button label="Supprimer et restaurer avec la phrase" variant="danger" onPress={reset} />
           )}
         </View>
@@ -64,10 +67,23 @@ export default function LockScreen() {
           Authentifiez-vous pour accéder à vos notes.
         </ThemedText>
       </View>
-      {failed && (
+      {failure === 'cancelled' && (
         <Notice tone="danger" title="Déverrouillage échoué ou annulé">
-          Si les empreintes ou le visage enregistrés sur ce téléphone ont changé, la clé n&apos;est
-          plus récupérable : restaurez le coffre avec vos 24 mots.
+          {biometricEnabled
+            ? 'Si les empreintes ou le visage enregistrés sur ce téléphone ont changé, la clé n’est plus récupérable : restaurez le coffre avec vos 24 mots.'
+            : 'Réessayez avec le code, le schéma, l’empreinte ou le visage de l’appareil.'}
+        </Notice>
+      )}
+      {failure === 'unreadable' && (
+        <Notice tone="warning" title="Clé momentanément illisible">
+          Le téléphone n’a pas rendu la clé du coffre. C’est souvent passager : réessayez, ou
+          redémarrez le téléphone. Vos notes sont intactes ; ne supprimez le coffre que si vous
+          avez vos 24 mots.
+        </Notice>
+      )}
+      {failure === 'missing' && (
+        <Notice tone="danger" title="Clé introuvable">
+          La clé du coffre n’est plus sur ce téléphone : restaurez le coffre avec vos 24 mots.
         </Notice>
       )}
     </Screen>

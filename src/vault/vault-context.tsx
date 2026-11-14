@@ -1,5 +1,6 @@
+import * as LocalAuthentication from 'expo-local-authentication';
 import { createContext, use, useEffect, useRef, useState, type ReactNode } from 'react';
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
 
 import { cryptoReady } from '@/crypto/aead';
 import { deriveVaultKeys, masterKeyFromEntropy, type VaultKeys } from '@/crypto/keys';
@@ -28,6 +29,15 @@ import type { RetiringVault } from '@/vault/retire';
  */
 export type VaultStatus = 'loading' | 'empty' | 'locked' | 'unlocked';
 
+/**
+ * Issue d'un déverrouillage :
+ * - `cancelled`  : authentification refusée ou annulée (ou, avec la biométrie,
+ *   clé invalidée par un changement des empreintes : le système ne les distingue pas) ;
+ * - `unreadable` : le système n'a pas rendu la clé (erreur du Keychain ou du Keystore) ;
+ * - `missing`    : plus aucune clé n'est enregistrée sur l'appareil.
+ */
+export type UnlockResult = 'ok' | 'cancelled' | 'unreadable' | 'missing';
+
 type VaultContextValue = {
   status: VaultStatus;
   /** Clés dérivées ; non nul uniquement quand le coffre est déverrouillé. */
@@ -36,12 +46,35 @@ type VaultContextValue = {
   accountId: string | null;
   biometricEnabled: boolean;
   biometricAvailable: boolean;
+  /**
+   * Verrouillage par le déverrouillage de l'appareil (code, schéma, empreinte
+   * ou visage), au choix de l'utilisateur. Contrairement à la biométrie, la
+   * clé n'y est pas liée par le système : c'est l'app qui exige
+   * l'authentification avant de la lire.
+   */
+  deviceLockEnabled: boolean;
+  /** L'appareil a un verrouillage d'écran (code, schéma, empreinte ou visage). */
+  deviceLockAvailable: boolean;
+  /** Le coffre se verrouille : au démarrage, après 30 s en arrière-plan, et à la demande. */
+  lockable: boolean;
+  /**
+   * La clé n'a pas pu être lue au démarrage : le coffre est présenté verrouillé
+   * plutôt qu'absent, pour qu'une erreur passagère ne pousse pas à en créer un
+   * autre (ce qui effacerait cette clé).
+   */
+  keyUnreadable: boolean;
   /** Ouvre un coffre à partir de l'entropie d'une phrase nouvelle ou saisie. */
   openWithEntropy: (entropy: Uint8Array) => Promise<void>;
-  /** @returns `false` si l'authentification a échoué ou a été annulée. */
-  unlock: () => Promise<boolean>;
+  unlock: () => Promise<UnlockResult>;
   lock: () => void;
   setBiometricEnabled: (enabled: boolean) => Promise<void>;
+  /**
+   * Active ou coupe le verrouillage par le code de l'appareil ; demande
+   * l'authentification dans les deux cas.
+   * @returns `false` si l'authentification a été refusée ou annulée.
+   * @throws si l'appareil n'a aucun verrouillage d'écran.
+   */
+  setDeviceLockEnabled: (enabled: boolean) => Promise<boolean>;
   /** Efface la clé et les notes de cet appareil. Sans la phrase, elles sont perdues. */
   destroy: () => Promise<void>;
   /**
@@ -59,9 +92,33 @@ type VaultContextValue = {
 // déclencher la demande d'empreinte au démarrage.
 const PREF_ACCOUNT = 'vault.account-id';
 const PREF_BIOMETRIC = 'vault.biometric';
+const PREF_DEVICE_LOCK = 'vault.device-lock';
 
 /** Durée en arrière-plan au-delà de laquelle le coffre se verrouille. */
 const BACKGROUND_LOCK_MS = 30_000;
+
+/** Demande le déverrouillage de l'appareil (biométrie, avec le code en repli). */
+async function authenticateDevice(promptMessage: string): Promise<boolean> {
+  try {
+    const result = await LocalAuthentication.authenticateAsync({
+      promptMessage,
+      cancelLabel: 'Annuler',
+    });
+    return result.success;
+  } catch {
+    return false;
+  }
+}
+
+async function hasDeviceLock(): Promise<boolean> {
+  if (Platform.OS === 'web') return false;
+  try {
+    const level = await LocalAuthentication.getEnrolledLevelAsync();
+    return level !== LocalAuthentication.SecurityLevel.NONE;
+  } catch {
+    return false;
+  }
+}
 
 const VaultContext = createContext<VaultContextValue | null>(null);
 
@@ -70,7 +127,11 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   const [keys, setKeys] = useState<VaultKeys | null>(null);
   const [accountId, setAccountId] = useState<string | null>(null);
   const [biometricEnabled, setBiometricState] = useState(false);
+  const [deviceLockEnabled, setDeviceLockState] = useState(false);
+  const [deviceLockAvailable, setDeviceLockAvailable] = useState(false);
+  const [keyUnreadable, setKeyUnreadable] = useState(false);
   const masterKey = useRef<Uint8Array | null>(null);
+  const lockable = biometricEnabled || deviceLockEnabled;
 
   const forget = () => {
     masterKey.current?.fill(0);
@@ -83,11 +144,12 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     const derived = deriveVaultKeys(key);
     setKeys(derived);
     setAccountId(derived.accountId);
+    setKeyUnreadable(false);
     setStatus('unlocked');
     return derived;
   };
 
-  // Démarrage : sans biométrie, la clé est chargée directement ; avec, on
+  // Démarrage : sans verrouillage, la clé est chargée directement ; avec, on
   // attend un geste de l'utilisateur sur l'écran de verrouillage.
   useEffect(() => {
     let cancelled = false;
@@ -95,6 +157,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       await cryptoReady();
       const storedAccount = isPersistent ? getPref(PREF_ACCOUNT) : null;
       const biometric = getPref(PREF_BIOMETRIC) === '1';
+      const deviceLock = getPref(PREF_DEVICE_LOCK) === '1';
       if (cancelled) return;
       if (!storedAccount) {
         setStatus('empty');
@@ -102,11 +165,22 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       }
       setAccountId(storedAccount);
       setBiometricState(biometric);
-      if (biometric) {
+      setDeviceLockState(deviceLock);
+      if (biometric || deviceLock) {
         setStatus('locked');
         return;
       }
-      const key = await loadMasterKey(false).catch(() => null);
+      let key: Uint8Array | null;
+      try {
+        key = await loadMasterKey(false);
+      } catch {
+        // Erreur du système, peut-être passagère : surtout ne pas conclure à
+        // l'absence de coffre. L'écran de verrouillage propose de réessayer.
+        if (cancelled) return;
+        setKeyUnreadable(true);
+        setStatus('locked');
+        return;
+      }
       if (cancelled) return;
       if (key) {
         adopt(key);
@@ -122,9 +196,18 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // Un verrouillage d'écran a pu être ajouté ou retiré pendant que l'app était en arrière-plan.
+  useEffect(() => {
+    void hasDeviceLock().then(setDeviceLockAvailable);
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void hasDeviceLock().then(setDeviceLockAvailable);
+    });
+    return () => subscription.remove();
+  }, []);
+
   // Verrouillage automatique après un passage prolongé en arrière-plan.
   useEffect(() => {
-    if (status !== 'unlocked' || !biometricEnabled) return;
+    if (status !== 'unlocked' || !lockable) return;
     let leftAt: number | null = null;
     const subscription = AppState.addEventListener('change', (state) => {
       if (state === 'active') {
@@ -138,7 +221,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       }
     });
     return () => subscription.remove();
-  }, [status, biometricEnabled]);
+  }, [status, lockable]);
 
   const openWithEntropy = async (entropy: Uint8Array) => {
     const key = masterKeyFromEntropy(entropy);
@@ -151,15 +234,19 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const unlock = async () => {
-    try {
-      const key = await loadMasterKey(biometricEnabled);
-      if (!key) return false;
-      adopt(key);
-      return true;
-    } catch {
-      return false;
+  const unlock = async (): Promise<UnlockResult> => {
+    if (!biometricEnabled && deviceLockEnabled) {
+      if (!(await authenticateDevice('Déverrouiller le coffre'))) return 'cancelled';
     }
+    let key: Uint8Array | null;
+    try {
+      key = await loadMasterKey(biometricEnabled);
+    } catch {
+      return biometricEnabled ? 'cancelled' : 'unreadable';
+    }
+    if (!key) return 'missing';
+    adopt(key);
+    return 'ok';
   };
 
   const lock = () => {
@@ -174,6 +261,19 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     await saveMasterKey(masterKey.current, enabled);
     setPref(PREF_BIOMETRIC, enabled ? '1' : '0');
     setBiometricState(enabled);
+  };
+
+  const setDeviceLockEnabled = async (enabled: boolean) => {
+    if (!(await hasDeviceLock())) {
+      throw new Error("Cet appareil n'a aucun verrouillage d'écran.");
+    }
+    const ok = await authenticateDevice(
+      enabled ? 'Verrouiller le coffre avec le code' : 'Retirer le verrouillage par code',
+    );
+    if (!ok) return false;
+    setPref(PREF_DEVICE_LOCK, enabled ? '1' : '0');
+    setDeviceLockState(enabled);
+    return true;
   };
 
   const recreate = async (entropy: Uint8Array, instance: SyncInstance | null) => {
@@ -220,9 +320,12 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     await deleteMasterKey();
     removePref(PREF_ACCOUNT);
     removePref(PREF_BIOMETRIC);
+    removePref(PREF_DEVICE_LOCK);
     forget();
     setAccountId(null);
     setBiometricState(false);
+    setDeviceLockState(false);
+    setKeyUnreadable(false);
     setStatus('empty');
   };
 
@@ -234,10 +337,15 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         accountId,
         biometricEnabled,
         biometricAvailable: canUseBiometrics(),
+        deviceLockEnabled,
+        deviceLockAvailable,
+        lockable,
+        keyUnreadable,
         openWithEntropy,
         unlock,
         lock,
         setBiometricEnabled,
+        setDeviceLockEnabled,
         destroy,
         recreate,
       }}>

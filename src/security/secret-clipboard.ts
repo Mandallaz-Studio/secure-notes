@@ -60,6 +60,19 @@ export async function copySecret(secret: string): Promise<void> {
 }
 
 /**
+ * Copie un texte qui contient une clé (un lien de partage) sans échéance :
+ * l'utilisateur le colle souvent plus tard, ailleurs. Il est tout de même
+ * marqué « sensible » sur Android (ni aperçu, ni historique du clavier) et
+ * gardé sur l'appareil sur iOS (pas de presse-papiers universel).
+ */
+export async function copySensitive(text: string): Promise<void> {
+  await Clipboard.setStringAsync(text, {
+    android: { isSensitive: true },
+    ios: { localOnly: true },
+  });
+}
+
+/**
  * Efface immédiatement le presse-papiers s'il contient `secret`, par exemple
  * une phrase que l'utilisateur vient de coller pour restaurer son coffre.
  */

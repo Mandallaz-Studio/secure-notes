@@ -45,6 +45,18 @@ export class AccountClosedError extends SyncError {
 }
 
 /**
+ * L'identifiant d'un partage est déjà pris par un autre compte : ce lien
+ * affiche désormais un contenu que son auteur ne contrôle plus.
+ */
+export class ShareTakenError extends SyncError {
+  constructor() {
+    super(
+      'Ce lien de partage a été repris par un autre compte : il ne montre plus votre note. Prévenez ses destinataires.',
+    );
+  }
+}
+
+/**
  * Met l'adresse sous une forme unique (le mot de passe du compte en dépend).
  * @throws SyncError si l'adresse est inutilisable.
  */
@@ -445,9 +457,15 @@ export class SupabaseRemote implements SyncRemote, BlobRemote {
    */
   async createShare(id: string, ciphertext: string, meta: string): Promise<void> {
     const reply = await this.rest('POST', '/shared_notes', { id, ciphertext, meta });
-    // 409 : ce partage existe déjà. Un identifiant neuf (aléatoire) n'entre
-    // jamais en conflit ; c'est donc un transfert repris après interruption.
-    if (reply.status === 201 || reply.status === 409) return;
+    if (reply.status === 201) return;
+    if (reply.status === 409) {
+      // Ce partage existe déjà. Un identifiant neuf (aléatoire) n'entre jamais
+      // en conflit : c'est un transfert repris après interruption… à condition
+      // que la ligne soit bien la nôtre (la lecture ne renvoie que les lignes
+      // du compte). Sinon, quelqu'un qui connaissait le lien l'a pris.
+      if ((await this.getShareCiphertext(id)) === ciphertext) return;
+      throw new ShareTakenError();
+    }
     const body = (reply.body ?? {}) as Json;
     if (typeof body.message === 'string' && body.message.includes('storage_quota_exceeded')) {
       throw new QuotaExceededError('Quota de stockage atteint');
@@ -534,6 +552,9 @@ export class SupabaseRemote implements SyncRemote, BlobRemote {
   }
 }
 
+/** Plus longue réponse admise : une copie de `shared_notes` (8 000 000 caractères) en JSON. */
+const MAX_SHARED_REPLY_CHARS = 8_000_016;
+
 /**
  * Lit la copie chiffrée d'une note partagée, sans compte.
  * @returns `null` si le lien n'existe pas ou a été révoqué.
@@ -556,11 +577,21 @@ export async function fetchSharedNote(
       signal: controller.signal,
     });
     status = response.status;
+    // L'instance peut être celle de l'auteur du lien : ne pas la croire sur la
+    // taille. Annoncée trop grande, la réponse n'est pas lue du tout.
+    if (Number(response.headers?.get('content-length') ?? 0) > MAX_SHARED_REPLY_CHARS) {
+      controller.abort();
+      throw new SyncError('Réponse du serveur trop volumineuse.');
+    }
     text = await response.text();
-  } catch {
+  } catch (cause) {
+    if (cause instanceof SyncError) throw cause;
     throw new SyncError('Serveur injoignable : vérifiez votre connexion.');
   } finally {
     clearTimeout(timer);
+  }
+  if (text.length > MAX_SHARED_REPLY_CHARS) {
+    throw new SyncError('Réponse du serveur trop volumineuse.');
   }
   if (status === 404) {
     throw new SyncError("Ce serveur ne propose pas le partage de notes (instance pas à jour).");

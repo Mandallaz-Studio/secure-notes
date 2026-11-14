@@ -4,6 +4,7 @@ import { AppState } from 'react-native';
 import {
   clearClipboardIfContains,
   copySecret,
+  copySensitive,
   SECRET_CLIPBOARD_SECONDS,
 } from '@/security/secret-clipboard';
 
@@ -42,6 +43,18 @@ beforeEach(() => {
   mockContent = '';
   setString.mockClear();
   Object.defineProperty(AppState, 'currentState', { value: 'active', configurable: true });
+});
+
+describe('copySensitive', () => {
+  it('copie sans échéance, en marquant le contenu sensible et local', async () => {
+    await copySensitive('https://notes.exemple.fr/s/1#clé');
+
+    expect(mockContent).toBe('https://notes.exemple.fr/s/1#clé');
+    expect(setString.mock.calls[0][1]).toEqual({
+      android: { isSensitive: true },
+      ios: { localOnly: true },
+    });
+  });
 });
 
 describe('copySecret', () => {

@@ -7,6 +7,7 @@ import {
   utf8Decode,
   utf8Encode,
 } from '@/crypto/aead';
+import { padJson } from '@/crypto/padding';
 import { newImageCache, toEditorImages } from '@/notes/blobs';
 import { docOfContent, type RichNode } from '@/notes/rich-text';
 import type { Note, NoteStore } from '@/notes/types';
@@ -57,6 +58,40 @@ export const isShareId = (value: unknown): value is string =>
 const noteContext = (id: string) => `sn1:share:${id}`;
 const metaContext = (id: string) => `sn1:sharemeta:${id}`;
 
+// Bourrage (voir `padding.ts`), dans les limites de `shared_notes` :
+// 8 000 000 caractères base64 pour la copie, 2 000 pour les métadonnées.
+const SHARE_MIN_BYTES = 1024;
+const SHARE_MAX_PADDED_BYTES = 5_999_000;
+const META_MIN_BYTES = 512;
+const META_MAX_PADDED_BYTES = 1_400;
+
+/**
+ * Bornes du document d'une copie partagée. Il vient d'un tiers (l'auteur du
+ * lien) et il est parcouru récursivement à l'affichage : une imbrication
+ * démesurée ferait planter l'app ou la page.
+ */
+const MAX_DOC_DEPTH = 64;
+const MAX_DOC_NODES = 200_000;
+
+/** Le document reste-t-il dans les bornes de profondeur et de taille ? */
+export function isReasonableDoc(doc: RichNode): boolean {
+  const stack: [RichNode, number][] = [[doc, 1]];
+  let nodes = 0;
+  while (stack.length > 0) {
+    const [node, depth] = stack.pop()!;
+    nodes += 1;
+    if (depth > MAX_DOC_DEPTH || nodes > MAX_DOC_NODES) return false;
+    if (node.content !== undefined) {
+      if (!Array.isArray(node.content)) return false;
+      for (const child of node.content) {
+        if (typeof child !== 'object' || child === null) return false;
+        stack.push([child, depth + 1]);
+      }
+    }
+  }
+  return true;
+}
+
 /**
  * Copie de la note telle qu'elle sera partagée. Les fichiers joints n'en font
  * pas partie.
@@ -85,7 +120,9 @@ export function sealShare(id: string, note: SharedNote, shareKey: Uint8Array): s
       'Cette note est trop volumineuse pour être partagée par lien (4 Mo au plus, images comprises).',
     );
   }
-  return toBase64(encrypt(plain, shareKey, noteContext(id)));
+  return toBase64(
+    encrypt(padJson(plain, SHARE_MIN_BYTES, SHARE_MAX_PADDED_BYTES), shareKey, noteContext(id)),
+  );
 }
 
 /** @throws si la clé n'est pas celle du lien, ou si la copie a été altérée. */
@@ -102,7 +139,8 @@ export function openShare(id: string, ciphertext: string, shareKey: Uint8Array):
     typeof note.sharedAt !== 'number' ||
     typeof note.doc !== 'object' ||
     note.doc === null ||
-    note.doc.type !== 'doc'
+    note.doc.type !== 'doc' ||
+    !isReasonableDoc(note.doc)
   ) {
     throw new Error('Copie partagée de forme inattendue');
   }
@@ -110,7 +148,8 @@ export function openShare(id: string, ciphertext: string, shareKey: Uint8Array):
 }
 
 export function sealShareMeta(id: string, meta: ShareMeta, wrapKey: Uint8Array): string {
-  return toBase64(encrypt(utf8Encode(JSON.stringify(meta)), wrapKey, metaContext(id)));
+  const plain = padJson(utf8Encode(JSON.stringify(meta)), META_MIN_BYTES, META_MAX_PADDED_BYTES);
+  return toBase64(encrypt(plain, wrapKey, metaContext(id)));
 }
 
 /** @returns `null` si la ligne n'a pas été écrite par ce compte, ou a été altérée. */

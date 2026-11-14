@@ -11,6 +11,7 @@ import { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { Button } from '@/components/button';
+import { editorNavigationGuard } from '@/components/editor-navigation';
 import { ThemedText } from '@/components/themed-text';
 import { Colors, NotePalette, Spacing } from '@/constants/theme';
 import { useThemePreference } from '@/theme/theme-preference';
@@ -60,7 +61,7 @@ export function EditorSpike() {
         />
       </View>
       <View style={styles.editor}>
-        <RichText editor={editor} />
+        <RichText editor={editor} {...editorNavigationGuard} />
       </View>
       {json && (
         <ScrollView style={[styles.json, { borderColor: colors.border }]}>
