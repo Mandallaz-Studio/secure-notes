@@ -56,6 +56,16 @@ export default function SettingsScreen() {
 
       <StorageSection />
 
+      <View style={styles.section}>
+        <ThemedText type="subtitle">Partage</ThemedText>
+        <ThemedText themeColor="textSecondary" type="small">
+          Les liens créés depuis une note restent actifs jusqu’à leur révocation.
+        </ThemedText>
+        <Link href={{ pathname: '/share/[noteId]', params: { noteId: 'all' } }} asChild>
+          <Button label="Liens de partage" />
+        </Link>
+      </View>
+
       <VaultSection />
 
       <View style={styles.section}>

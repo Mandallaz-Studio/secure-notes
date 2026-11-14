@@ -71,6 +71,9 @@ export function credentialsFor(
 
 type Json = Record<string, unknown>;
 
+/** Partage tel que le serveur le garde : tout y est chiffré. */
+export type RemoteShare = { id: string; meta: string; createdAt: number };
+
 type Reply = { status: number; body: unknown; bytes?: Uint8Array };
 
 /** Bucket Storage privé des blocs chiffrés (voir la migration « attachments »). */
@@ -408,6 +411,44 @@ export class SupabaseRemote implements SyncRemote, BlobRemote {
     if (reply.status !== 204 && reply.status !== 200) SupabaseRemote.fail(reply);
   }
 
+  // --- Partage par lien -----------------------------------------------------
+
+  /**
+   * Dépose la copie chiffrée d'une note, lisible par qui connaît `id`.
+   * @throws QuotaExceededError si le quota du compte ne suffit pas.
+   */
+  async createShare(id: string, ciphertext: string, meta: string): Promise<void> {
+    const reply = await this.rest('POST', '/shared_notes', { id, ciphertext, meta });
+    if (reply.status === 201) return;
+    const body = (reply.body ?? {}) as Json;
+    if (typeof body.message === 'string' && body.message.includes('storage_quota_exceeded')) {
+      throw new QuotaExceededError('Quota de stockage atteint');
+    }
+    SupabaseRemote.fail(reply);
+  }
+
+  /** Partages du compte, du plus récent au plus ancien. */
+  async listShares(): Promise<RemoteShare[]> {
+    const reply = await this.rest(
+      'GET',
+      '/shared_notes?select=id,meta,created_at&order=created_at.desc&limit=1000',
+    );
+    if (reply.status !== 200 || !Array.isArray(reply.body)) SupabaseRemote.fail(reply);
+    const shares: RemoteShare[] = [];
+    for (const row of reply.body as Json[]) {
+      if (typeof row.id !== 'string' || typeof row.meta !== 'string') continue;
+      const createdAt = typeof row.created_at === 'string' ? Date.parse(row.created_at) : NaN;
+      shares.push({ id: row.id, meta: row.meta, createdAt: Number.isNaN(createdAt) ? 0 : createdAt });
+    }
+    return shares;
+  }
+
+  /** Révoque un lien : sa copie disparaît du serveur. */
+  async deleteShare(id: string): Promise<void> {
+    const reply = await this.rest('DELETE', `/shared_notes?id=eq.${id}`);
+    if (reply.status !== 204 && reply.status !== 200) SupabaseRemote.fail(reply);
+  }
+
   async getUsage(): Promise<StorageUsage | null> {
     const reply = await this.rest('GET', '/profiles?select=storage_quota_bytes,storage_used_bytes');
     const row = Array.isArray(reply.body) ? (reply.body[0] as Json | undefined) : undefined;
@@ -419,5 +460,45 @@ export class SupabaseRemote implements SyncRemote, BlobRemote {
       return null;
     }
     return { usedBytes: row.storage_used_bytes, quotaBytes: row.storage_quota_bytes };
+  }
+}
+
+/**
+ * Lit la copie chiffrée d'une note partagée, sans compte.
+ * @returns `null` si le lien n'existe pas ou a été révoqué.
+ * @throws SyncError si l'instance est injoignable ou refuse la requête.
+ */
+export async function fetchSharedNote(
+  instance: SyncInstance,
+  id: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<string | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let status: number;
+  let text: string;
+  try {
+    const response = await fetchImpl(`${instance.url}/rest/v1/rpc/get_shared_note`, {
+      method: 'POST',
+      headers: { apikey: instance.anonKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ share_id: id }),
+      signal: controller.signal,
+    });
+    status = response.status;
+    text = await response.text();
+  } catch {
+    throw new SyncError('Serveur injoignable : vérifiez votre connexion.');
+  } finally {
+    clearTimeout(timer);
+  }
+  if (status === 404) {
+    throw new SyncError("Ce serveur ne propose pas le partage de notes (instance pas à jour).");
+  }
+  if (status !== 200) throw new SyncError(`Le serveur a refusé la lecture (${status}).`);
+  try {
+    const body: unknown = text === '' ? null : JSON.parse(text);
+    return typeof body === 'string' && body !== '' ? body : null;
+  } catch {
+    throw new SyncError('Réponse du serveur inattendue.');
   }
 }

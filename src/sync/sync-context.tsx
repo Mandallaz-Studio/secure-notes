@@ -1,4 +1,4 @@
-import { createContext, use, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, use, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AppState } from 'react-native';
 
 import { useNotes } from '@/notes/notes-context';
@@ -45,6 +45,8 @@ type SyncContextValue = {
   enable: (url: string, anonKey: string) => Promise<void>;
   disable: () => void;
   syncNow: () => void;
+  /** Accès au serveur ; `null` si la synchronisation est désactivée ou le coffre verrouillé. */
+  remote: SupabaseRemote | null;
 };
 
 /** Délai après une modification locale avant de l'envoyer. */
@@ -142,9 +144,13 @@ export function SyncProvider({ children }: { children: ReactNode }) {
 
   const { enabled, url, anonKey } = config;
 
+  const remote = useMemo(
+    () => (enabled && keys ? new SupabaseRemote({ url, anonKey }, credentialsFor(keys, url)) : null),
+    [enabled, url, anonKey, keys],
+  );
+
   useEffect(() => {
-    if (!enabled || !keys || !store) return;
-    const remote = new SupabaseRemote({ url, anonKey }, credentialsFor(keys, url));
+    if (!remote || !keys || !store) return;
     const current = new SyncRunner(
       store,
       remote,
@@ -190,7 +196,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       setStatus(OFF);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `invalidate` change à chaque rendu
-  }, [enabled, url, anonKey, keys, store]);
+  }, [remote, keys, store]);
 
   // Chaque écriture locale déclenche un envoi, après un court délai.
   useEffect(() => {
@@ -219,7 +225,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
 
   return (
     <SyncContext
-      value={{ config, status, enable, disable, syncNow: () => runner.current?.request() }}>
+      value={{ config, status, enable, disable, syncNow: () => runner.current?.request(), remote }}>
       {children}
     </SyncContext>
   );

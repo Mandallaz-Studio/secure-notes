@@ -238,6 +238,12 @@ function NoteEditor({ initial, isNew, store, revision, onChanged, onReplaced }: 
     }
   };
 
+  const openSharing = async () => {
+    // Le lien partage la note telle qu'elle est enregistrée.
+    await update(await currentNote(), true);
+    router.push({ pathname: '/share/[noteId]', params: { noteId: latest.current.id } });
+  };
+
   const describe = (action: string, cause: unknown) =>
     setSaveError(cause instanceof ImportError ? cause.message : `${action} : ${String(cause)}`);
 
@@ -301,13 +307,24 @@ function NoteEditor({ initial, isNew, store, revision, onChanged, onReplaced }: 
           headerRight:
             markdownFilesSupported && !isBlank(note)
               ? () => (
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Exporter en Markdown"
-                    hitSlop={8}
-                    onPress={exportMarkdown}>
-                    <ThemedText style={{ color: theme.tint }}>Exporter</ThemedText>
-                  </Pressable>
+                  <View style={styles.headerActions}>
+                    {!inTrash && (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="Partager par lien"
+                        hitSlop={8}
+                        onPress={() => void openSharing()}>
+                        <ThemedText style={{ color: theme.tint }}>Partager</ThemedText>
+                      </Pressable>
+                    )}
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Exporter en Markdown"
+                      hitSlop={8}
+                      onPress={exportMarkdown}>
+                      <ThemedText style={{ color: theme.tint }}>Exporter</ThemedText>
+                    </Pressable>
+                  </View>
                 )
               : undefined,
         }}
@@ -452,6 +469,7 @@ const styles = StyleSheet.create({
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: Spacing.four },
   inner: { flex: 1, width: '100%', maxWidth: MaxContentWidth },
   header: { padding: Spacing.three, paddingBottom: Spacing.two, gap: Spacing.two },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three },
   title: { fontSize: 24, fontWeight: 700, paddingVertical: Spacing.one },
   // Sans cela, la rangée défilante s'étire en hauteur.
   chipScroll: { flexGrow: 0 },

@@ -1,8 +1,11 @@
 # Secure Notes — plan de développement
 
 > Document de reprise pour les prochaines sessions. Dernière mise à jour : 2026-11-14.
-> État : **phases 0 à 5 terminées**. Prochaine étape : phase 6 (partage par lien).
-> À faire sur l'instance Supabase : appliquer `supabase/migrations/20261114000000_attachments.sql`.
+> État : **phases 0 à 5 terminées, phase 6 codée mais pas encore vérifiée de bout en bout**.
+> Prochaine étape : finir la vérification de la phase 6 (voir son bilan), puis phase 7.
+> À faire sur l'instance Supabase : appliquer `supabase/migrations/20261114000000_attachments.sql`
+> puis `20261115000000_sharing.sql`.
+> À fournir : le sous-domaine du site de lecture (`EXPO_PUBLIC_SHARE_BASE_URL` dans `.env.local`).
 
 ## 1. Objectif
 
@@ -58,6 +61,10 @@ cloud optionnelle via Supabase. Le serveur ne doit jamais voir de données en cl
 | Mot de passe du compte | Dérivé du secret d'authentification **et de l'adresse de l'instance** | Une instance malveillante n'apprend rien qui permette de se connecter ailleurs (et d'y supprimer les notes). Contrepartie : tous les appareils doivent saisir exactement la même adresse |
 | Plateformes | iOS et Android | Voir ligne « App web complète » |
 | Stockage des fichiers (phase 5) | Blocs chiffrés dans un **bucket Storage privé** (`attachments`), un objet par bloc ; la table `attachments` ne garde qu'une ligne par fichier | Demande de l'utilisateur (2026-11-14) : Storage offre plus de place que la base. Les politiques de Storage ne connaissant pas la taille d'un objet avant son dépôt, le quota est réservé à la déclaration du fichier (taille annoncée) et revérifié à chaque bloc sur la place réellement occupée |
+
+| Copies partagées (phase 6) | Dans la table `shared_notes`, lues par la fonction `get_shared_note`, **pas dans Storage** | Un objet lisible sans compte serait soit dans un bucket public (mis en cache : révocation différée), soit énumérable par tous. La table n'est pas lisible publiquement, seule la lecture par identifiant l'est. Contrepartie : ces copies (4 Mo au plus chacune, images comprises) occupent la base ; elles comptent dans le quota |
+| Contenu d'un partage (phase 6) | Copie figée au moment du partage, images incluses, **sans les fichiers joints** ; plusieurs liens possibles par note | Révoquer = supprimer la copie. Mettre la copie à jour demanderait de garder la clé du lien modifiable côté serveur |
+| Web (phase 6) | Sur le web, l'app ne montre que la route de lecture `/s/<id>` ; export en mode « single » (une page, routage côté navigateur) | Les routes dynamiques ne se pré-rendent pas en statique ; Cloudflare Pages sert `index.html` pour tout chemin inconnu |
 
 ### Encore ouvert
 
@@ -154,7 +161,7 @@ Chaque phase tient en principe en une session et se termine par un résultat vé
 - [x] Phase 3 — Éditeur
 - [x] Phase 4 — Synchro Supabase (voir « Bilan de la phase 4 »)
 - [x] Phase 5 — Pièces jointes et images (voir « Bilan de la phase 5 »)
-- [ ] Phase 6 — Partage par lien
+- [ ] Phase 6 — Partage par lien : codée, vérification de bout en bout en attente (voir « Bilan de la phase 6 »)
 - [ ] Phase 7 — Export, recréation de compte, finitions
 
 ### Bilan de la phase 0 (terminée le 2026-11-13, sur Android et web)
@@ -525,6 +532,77 @@ Limites connues :
 - Les notes elles-mêmes ne comptent pas dans le quota.
 - Supprimer un compte côté serveur laisse ses objets dans le bucket (à vider à la main).
 - Un fichier ouvert quitte le coffre **en clair** (copie supprimée après 2 minutes).
+
+### Bilan de la phase 6 (codée le 2026-11-14, vérification incomplète)
+
+Fait :
+- **Serveur** (`supabase/migrations/20261115000000_sharing.sql`) : table `shared_notes`
+  (copie chiffrée, méta chiffrée, taille comptée dans le quota), RLS par compte, et
+  fonction `get_shared_note(share_id)` ouverte à tous : c'est la seule lecture publique,
+  la table ne peut pas être parcourue.
+- **Format** (`src/share/codec.ts`) : lien `<site>/s/<id>#<clé>` ; la clé (256 bits,
+  aléatoire, propre au lien) n'est que dans le fragment. Si l'instance n'est pas celle
+  de la compilation, son adresse et sa clé publique suivent : `#<clé>.<instance>`.
+  La copie authentifie l'identifiant du lien. Le propriétaire garde, chiffrés par la clé
+  d'enveloppe, la note d'origine, la clé du lien et le début du titre : tout appareil du
+  compte peut ainsi relister, recopier et révoquer les liens.
+- **App** : bouton « Partager » dans l'en-tête d'une note → écran `/share/<note>`
+  (créer un lien, copier, envoyer par la feuille de partage, révoquer). Réglages →
+  Partage → « Liens de partage » : tous les liens du compte, y compris ceux de notes
+  supprimées. Le partage exige la synchronisation activée.
+- **Lecture** (`src/app/s/[id].tsx`, `src/components/rich-view.tsx`) : affichage en
+  lecture seule sans WebView (titres, marques, couleurs par jetons selon le thème,
+  listes, tâches, citations, images incluses). Une image distante n'est jamais chargée,
+  un lien ne s'ouvre que s'il est en http(s). La route est accessible coffre verrouillé
+  ou absent ; sur le web c'est la seule.
+- **Site** : `npx expo export -p web` produit le site statique (dossier `dist`) ;
+  `public/_headers` pose la CSP (aucun script tiers, `wasm-unsafe-eval` pour libsodium),
+  `Referrer-Policy: no-referrer`, pas de mise en cache de la page.
+- **Liens d'app** (`app.config.js`) : si `EXPO_PUBLIC_SHARE_BASE_URL` est définie, l'app
+  déclare le filtre d'intention Android (`https://<site>/s/…`, `autoVerify`) et le
+  domaine associé iOS. Sans elle, les liens sont en `securenotes://s/…`.
+- 144 tests Jest (10 nouveaux) ; types et lint passent.
+
+Vérifié, dans un navigateur, sur l'export web servi en local avec la CSP du fichier
+`_headers` :
+- la page se charge sans erreur de CSP, libsodium compris ; `/` renvoie sur la lecture ;
+- lien tronqué → message « incomplet ou invalide » ; instance sans la migration →
+  message d'erreur du serveur ;
+- avec une réponse du serveur simulée dans la page : une copie chiffrée par le même
+  algorithme se déchiffre et s'affiche (titre, gras, couleur, surlignage, listes, tâches,
+  citation, image incluse) ; l'image distante du document n'est pas chargée ; une seule
+  requête sort, vers `get_shared_note`.
+
+Non vérifié :
+- **Le critère de la phase** (un lien s'ouvre sans compte, puis plus après révocation) :
+  la migration n'est pas appliquée sur l'instance. Création, liste et révocation ne sont
+  couvertes que par Jest, contre un serveur simulé.
+- **Tout le côté app** : l'émulateur s'est arrêté pendant la session. Ni l'écran de
+  partage, ni le bouton « Partager », ni l'ouverture d'un lien `securenotes://s/…` dans
+  l'app n'ont été vus sur appareil.
+- Le déploiement sur Cloudflare Pages et les liens d'app / universels.
+
+Reste à faire pour clore la phase :
+1. Appliquer les deux migrations sur l'instance.
+2. Choisir le sous-domaine, le mettre dans `.env.local`
+   (`EXPO_PUBLIC_SHARE_BASE_URL=https://notes.<domaine>`), créer le projet Cloudflare
+   Pages (commande de build `npx expo export -p web`, dossier `dist`, avec les variables
+   `EXPO_PUBLIC_SUPABASE_URL` et `EXPO_PUBLIC_SUPABASE_ANON_KEY`), CNAME dans la zone OVH.
+3. Liens d'app : ajouter `public/.well-known/assetlinks.json` (empreinte SHA-256 du
+   certificat de signature : `eas credentials -p android`) et
+   `public/.well-known/apple-app-site-association` (identifiant d'équipe Apple), puis
+   reconstruire l'app (le filtre d'intention est natif).
+4. Sur émulateur : partager, ouvrir le lien dans un navigateur sans compte, révoquer,
+   constater que le lien ne s'ouvre plus.
+
+Limites connues :
+- Supprimer une note ne révoque pas ses liens (ils restent listés dans les réglages).
+- La copie ne suit pas les modifications de la note : il faut recréer un lien.
+- Qui a eu le lien a pu garder la copie : révoquer n'efface que celle du serveur.
+- Le serveur voit quand et combien de fois une copie est lue, et depuis quelle adresse.
+- La clé reste dans l'historique du navigateur du destinataire (fragment de l'adresse).
+- Un lien ouvert dans l'app émet une requête vers l'instance qu'il désigne, même
+  synchronisation désactivée.
 
 ## 5. Points d'attention
 
