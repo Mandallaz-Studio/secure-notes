@@ -14,9 +14,9 @@ import { useVault, type UnlockResult } from '@/vault/vault-context';
 type Failure = Exclude<UnlockResult, 'ok'>;
 
 export default function LockScreen() {
-  const { unlock, destroy, biometricEnabled, keyUnreadable } = useVault();
-  // Clé illisible au démarrage : on le dit d'emblée, sans attendre un essai.
-  const [failure, setFailure] = useState<Failure | null>(keyUnreadable ? 'unreadable' : null);
+  const { unlock, destroy, restoreWithPhrase, biometricEnabled, keyProblem } = useVault();
+  // Clé illisible ou absente au démarrage : on le dit d'emblée, sans attendre un essai.
+  const [failure, setFailure] = useState<Failure | null>(keyProblem);
   const [busy, setBusy] = useState(false);
 
   const tryUnlock = async () => {
@@ -45,18 +45,26 @@ export default function LockScreen() {
     <Screen
       withoutHeader
       footer={
-        <View style={styles.block}>
-          <Button
-            label={failure === 'unreadable' ? 'Réessayer' : 'Déverrouiller'}
-            icon={biometricEnabled ? Fingerprint : LockKeyhole}
-            variant="primary"
-            disabled={busy}
-            onPress={tryUnlock}
-          />
-          {failure !== null && (
-            <Button label="Supprimer et restaurer avec la phrase" variant="danger" onPress={reset} />
-          )}
-        </View>
+        failure === 'missing' ? (
+          // Sans clé, rien à réessayer ; et surtout rien à effacer : la phrase
+          // rouvre la base restée sur l'appareil.
+          <View style={styles.block}>
+            <Button label="Restaurer avec la phrase" variant="primary" onPress={restoreWithPhrase} />
+          </View>
+        ) : (
+          <View style={styles.block}>
+            <Button
+              label={failure === 'unreadable' ? 'Réessayer' : 'Déverrouiller'}
+              icon={biometricEnabled ? Fingerprint : LockKeyhole}
+              variant="primary"
+              disabled={busy}
+              onPress={tryUnlock}
+            />
+            {failure !== null && (
+              <Button label="Supprimer et restaurer avec la phrase" variant="danger" onPress={reset} />
+            )}
+          </View>
+        )
       }>
       <View style={styles.hero}>
         <Logo size={72} />
@@ -83,7 +91,8 @@ export default function LockScreen() {
       )}
       {failure === 'missing' && (
         <Notice tone="danger" title="Clé introuvable">
-          La clé du coffre n’est plus sur ce téléphone : restaurez le coffre avec vos 24 mots.
+          La clé du coffre n’est plus sur ce téléphone : restaurez le coffre avec vos 24 mots. Les
+          notes restées sur l’appareil seront retrouvées.
         </Notice>
       )}
     </Screen>

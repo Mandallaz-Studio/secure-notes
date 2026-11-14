@@ -39,30 +39,47 @@ sélecteur d'apps sur iOS.
 **À déployer :** l'en-tête HSTS et les nouvelles bornes de la page de lecture
 ne s'appliquent qu'après un nouvel export web publié sur Cloudflare Pages.
 
+### Second passage (audits externes du 2026-11-14 : SN-01 à SN-05, SN-AUD-001 à 003)
+
+| Réf. | Constat | Correctif |
+|---|---|---|
+| SN-01 | Un lien révoqué (ou dont la note est mise à la corbeille) libérait son identifiant : n'importe quel destinataire pouvait y déposer une fausse note, affichée comme authentique | Migration `20261117000000_share_tombstones.sql` : toute suppression d'un partage note son identifiant dans `revoked_shares`, et un partage ne peut plus être créé sous un identifiant noté (`share_id_revoked`). « Recréer le coffre » ne supprime plus les liens pour les recréer : `transfer_share()` change leur propriétaire en une seule transaction, avec l'accord préalable du nouveau compte (`accept_shares_from`). Supprime aussi la fenêtre de détournement de l'ancien point 6. |
+| SN-02 / SN-AUD-001 | Une instance malveillante pouvait ramener une note à une ancienne version, ou faire réapparaître une note supprimée | La date de modification d'une note ou catégorie ne recule plus jamais (`touched`, `src/notes/model.ts`), même avec une horloge en retard. Chaque base garde la plus récente version échangée avec le serveur pour chaque élément, même supprimé (table `version_floor`, migration locale 6). Une ligne qui n'est pas plus récente est écartée et la version de l'appareil (ou sa suppression) renvoyée ; une suppression porte désormais la date de la version qu'elle supprime, et une suppression plus ancienne que la version locale est écartée. Le nombre de versions écartées s'affiche dans les réglages. |
+| SN-03 / SN-AUD-002 | Un lien pouvait désigner n'importe quelle instance et s'afficher sous le nom et le logo de l'app | La page de lecture (web et app) annonce une instance autre que celle de l'app **avant** de la contacter (« Serveur inconnu »), puis affiche « Hébergée sur *hôte* » et retire le logo et la mention « le serveur ne peut pas la lire ». Dans l'app, ouvrir un lien demande aussi confirmation quand l'instance n'est pas celle où l'on synchronise (ou sans synchronisation) : aucune requête sans accord. |
+| SN-05 | Activer ou couper la biométrie supprimait la clé avant d'écrire la nouvelle : une demande d'empreinte annulée ou une app tuée entre les deux perdait la clé | Deux emplacements dans le Keychain / Keystore (`src/vault/key-store.ts`) : la nouvelle entrée est écrite dans l'emplacement libre, puis l'emplacement actif bascule. Un échec laisse l'ancienne entrée intacte. Une clé absente alors que le coffre est connu ne mène plus à l'accueil : l'écran de verrouillage propose « Restaurer avec la phrase », sans effacer la base de l'appareil. |
+
+Vérifications : 203 tests Jest (nouveaux : enregistrement de la clé avec un
+Keystore qui refuse, transfert des liens, identifiant révoqué, versions
+resservies par le serveur, horloge en retard), `tsc` et `expo lint` sans
+erreur. Les nouvelles requêtes SQLite (migration 6, plancher de version) ont été
+exécutées sur un moteur SQLite 3.46.
+
+**Non vérifié :** la migration Supabase n'a pas été exécutée sur une base
+PostgreSQL ; rien n'a été essayé sur l'émulateur.
+
+**À déployer :** appliquer la migration `20261117000000_share_tombstones.sql`
+**avant** de publier l'app (l'ancien transfert des liens par suppression puis
+recréation échoue avec elle, le nouveau a besoin d'elle) ; publier un nouvel
+export web pour la page de lecture.
+
 ## Restant
 
 ### Moyen
 
-**1. Retour arrière et résurrection par le serveur.**
-`synchronize` (`src/sync/engine.ts`) applique toute ligne qui se déchiffre et a
-un `seq` plus grand. Une instance malveillante peut renvoyer un ancien chiffré
-d'une note (retour à une ancienne version) ou d'une note supprimée depuis
-(résurrection). Elle peut aussi retenir des éléments sans que ce soit détecté.
-Confidentialité intacte, intégrité partielle.
-*Piste :* refuser une version entrante plus ancienne (`updatedAt`) qu'une
-version locale non modifiée ; garder les identifiants supprimés et refuser leur
-réapparition. La détection des omissions demanderait un manifeste authentifié
-(par exemple une chaîne d'empreintes sous la clé d'enveloppe).
+**1. Rétention d'éléments par le serveur (reste de SN-02).**
+Le retour arrière et la résurrection sont écartés, mais une instance peut
+encore retenir des éléments (ne jamais servir une modification à un autre
+appareil) sans que ce soit détecté. Les versions envoyées par une ancienne
+version de l'app, dont l'horloge retarde, peuvent aussi être écartées à tort.
+*Piste :* manifeste authentifié du compte (chaîne d'empreintes des couples
+(id, version) sous une clé dérivée), vérifié par chaque appareil.
 
-**2. Contenu usurpé sous le domaine de lecture.**
-`parseShareFragment` accepte n'importe quelle instance HTTPS dans le fragment.
-N'importe qui peut fabriquer un lien `https://<site de lecture>/s/<id>#<clé>.<son instance>`
-qui affiche son contenu avec le logo de l'app et la mention « le serveur ne
-peut pas la lire » ; dans l'app aussi, via les liens d'app. Le lecteur ne peut
-pas savoir qui a écrit la note.
-*Piste :* afficher « Hébergé par *hôte* — contenu non vérifié » quand
-l'instance n'est pas celle par défaut, ou limiter la page web à l'instance par
-défaut et resserrer `connect-src`.
+**2. Auteur d'un lien non authentifié (reste de SN-01 et SN-03).**
+Les liens ne peuvent plus être repris, et les instances inconnues sont
+annoncées, mais un lien prouve seulement que son contenu vient de qui
+connaît la clé. Les identifiants révoqués avant la migration restent
+réutilisables.
+*Piste :* signature Ed25519 par partage (clé publique dans le fragment).
 
 **3. Inscription ouverte sur l'instance.**
 Avec la clé publique, un script peut créer un nombre illimité de comptes de
@@ -70,6 +87,19 @@ Avec la clé publique, un script peut créer un nombre illimité de comptes de
 *Piste :* captcha à l'inscription (Turnstile ou hCaptcha, gérés par Supabase
 Auth), limites de débit plus strictes, quota par défaut plus bas ou plafond
 global, surveillance de l'usage.
+*Réglages retenus (tableau de bord Supabase, sans changement de code) :*
+- **Authentication → Rate Limits** : baisser « Sign-ups and sign-ins » (30
+  requêtes / 5 min par IP par défaut ; l'app n'appelle `/auth/v1/signup`
+  qu'une fois par coffre et par instance), par exemple à 10.
+- **Organization → Billing** : plafond de dépenses (spend cap) et alertes
+  d'usage sur la base, le stockage et le trafic sortant.
+- **Authentication → Sign In / Providers** : « Confirm email » reste désactivé
+  (l'app l'exige).
+- **Ne pas activer** la protection CAPTCHA (Authentication → Bot and Abuse
+  Protection) tant que l'app n'envoie pas de jeton : elle couvrirait aussi la
+  connexion, et bloquerait alors tous les appareils.
+- Non couvert par le tableau de bord : quota par défaut plus bas (migration
+  SQL), limite de débit sur `get_shared_note` (fonction edge ou proxy).
 
 ### Faible
 
@@ -88,12 +118,8 @@ visibles aussi : nombre d'éléments, heures de modification, et l'activité de
 tous les comptes à travers la séquence globale `items_seq`. Le bourrage
 augmente l'occupation du quota (au moins ~1,4 Kio par note ou catégorie).
 
-**6. Détournement d'un lien pendant la recréation : réduit, pas supprimé.**
-La fenêtre est désormais l'intervalle entre deux requêtes (plus long si l'app
-est interrompue entre les deux). Un détournement est détecté et signalé, mais
-le lien détourné ne peut pas être récupéré.
-*Piste :* une fonction SQL qui transfère la ligne d'un compte à l'autre en une
-seule transaction, sur preuve de possession des deux comptes.
+**6. ~~Détournement d'un lien pendant la recréation~~** — corrigé par
+`transfer_share()` (voir SN-01).
 
 **7. Bornes des réponses partielles.**
 Une réponse sans `Content-Length` est lue entièrement avant le contrôle de

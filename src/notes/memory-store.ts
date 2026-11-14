@@ -1,5 +1,5 @@
 import { blobIdsOf } from '@/notes/blobs';
-import { compareNotes, foldText, matchesFilter, summarize } from '@/notes/model';
+import { compareNotes, foldText, matchesFilter, summarize, touched } from '@/notes/model';
 import type {
   BlobState,
   Category,
@@ -27,6 +27,8 @@ export class MemoryNoteStore implements NoteStore {
   /** Suppressions à envoyer : identifiant → version du serveur à remplacer. */
   private tombstones = new Map<string, number>();
   private syncValues = new Map<string, string>();
+  /** Voir `getVersionFloor` : survit à la suppression et au changement d'instance. */
+  private floors = new Map<string, number>();
   private blobs = new Map<string, { data: Uint8Array; uploaded: boolean; createdAt: number }>();
 
   async listNotes(filter: NoteFilter): Promise<NoteSummary[]> {
@@ -73,7 +75,7 @@ export class MemoryNoteStore implements NoteStore {
     if (this.categories.delete(id)) this.bury(id);
     for (const note of [...this.notes.values()]) {
       if (note.categoryId === id) {
-        await this.saveNote({ ...note, categoryId: null, updatedAt: now });
+        await this.saveNote({ ...note, categoryId: null, updatedAt: touched(note, now) });
       }
     }
   }
@@ -131,6 +133,24 @@ export class MemoryNoteStore implements NoteStore {
     if (change.kind === 'note') this.notes.set(id, { ...change.note });
     else this.categories.set(id, { ...change.category });
     this.meta.set(id, { dirty: false, serverSeq: seq });
+    this.raiseFloor(id, change.kind === 'note' ? change.note.updatedAt : change.category.updatedAt);
+  }
+
+  private raiseFloor(id: string, updatedAt: number): void {
+    this.floors.set(id, Math.max(this.floors.get(id) ?? -Infinity, updatedAt));
+  }
+
+  async getVersionFloor(id: string): Promise<number | null> {
+    return this.floors.get(id) ?? null;
+  }
+
+  async requeue(id: string, seq: number): Promise<void> {
+    if (this.notes.has(id) || this.categories.has(id)) {
+      this.tombstones.delete(id);
+      this.meta.set(id, { dirty: true, serverSeq: seq });
+    } else {
+      this.tombstones.set(id, seq);
+    }
   }
 
   async setServerSeq(id: string, seq: number): Promise<void> {
@@ -146,6 +166,8 @@ export class MemoryNoteStore implements NoteStore {
       if (this.tombstones.get(entry.id) === entry.serverSeq) this.tombstones.delete(entry.id);
       return;
     }
+    const sent = entry.kind === 'note' ? entry.note : entry.category;
+    this.raiseFloor(entry.id, sent.updatedAt);
     const current =
       entry.kind === 'note' ? this.notes.get(entry.id) : this.categories.get(entry.id);
     if (!current) {
@@ -153,7 +175,6 @@ export class MemoryNoteStore implements NoteStore {
       this.tombstones.set(entry.id, seq);
       return;
     }
-    const sent = entry.kind === 'note' ? entry.note : entry.category;
     this.meta.set(entry.id, { dirty: current.updatedAt !== sent.updatedAt, serverSeq: seq });
   }
 
@@ -223,6 +244,7 @@ export class MemoryNoteStore implements NoteStore {
     this.meta.clear();
     this.tombstones.clear();
     this.syncValues.clear();
+    this.floors.clear();
     this.blobs.clear();
   }
 }

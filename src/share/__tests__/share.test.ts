@@ -17,6 +17,8 @@ import {
   ShareError,
   type SharedNote,
 } from '@/share/codec';
+import { hostOf, isDefaultInstance, sameInstanceUrl } from '@/share/config';
+import { QuotaExceededError } from '@/sync/blobs';
 import { fetchSharedNote, ShareTakenError, SupabaseRemote, SyncError } from '@/sync/supabase';
 
 beforeAll(async () => {
@@ -248,5 +250,62 @@ describe('serveur', () => {
     await expect(remote.createShare('s1', 'chiffré', 'méta')).resolves.toBeUndefined();
     await expect(remote.createShare('s1', 'autre copie', 'méta')).rejects.toThrow(ShareTakenError);
     await expect(remote.createShare('s2', 'chiffré', 'méta')).rejects.toThrow(ShareTakenError);
+  });
+
+  it('refuse de recréer un partage sous l’identifiant d’un lien révoqué', async () => {
+    const { impl } = fakeFetch(({ path }) => {
+      if (path.startsWith('/auth')) return [200, { access_token: 'jeton', user: { id: 'moi' } }];
+      return [400, { code: 'P0001', message: 'share_id_revoked' }];
+    });
+    const remote = new SupabaseRemote(instance, { email: 'e', password: 'p' }, impl);
+
+    await expect(remote.createShare('s1', 'fausse copie', 'méta')).rejects.toThrow(ShareTakenError);
+  });
+
+  it('transfère un partage au compte successeur en un seul appel', async () => {
+    const { impl, calls } = fakeFetch(({ path, body }) => {
+      if (path.startsWith('/auth')) return [200, { access_token: 'jeton', user: { id: 'ancien' } }];
+      if (path === '/rest/v1/rpc/transfer_share') {
+        const { share_id: id } = body as { share_id: string };
+        if (id === 'plein') return [400, { message: 'storage_quota_exceeded' }];
+        return [200, id === 's1'];
+      }
+      return [204, null];
+    });
+    const remote = new SupabaseRemote(instance, { email: 'e', password: 'p' }, impl);
+
+    expect(await remote.accountUserId()).toBe('ancien');
+    await remote.acceptSharesFrom('ancien');
+    expect(await remote.transferShare('s1', 'nouveau', 'méta')).toBe(true);
+    expect(await remote.transferShare('s2', 'nouveau', 'méta')).toBe(false);
+    await expect(remote.transferShare('plein', 'nouveau', 'méta')).rejects.toThrow(
+      QuotaExceededError,
+    );
+    expect(calls.find((call) => call.path === '/rest/v1/rpc/transfer_share')?.body).toEqual({
+      share_id: 's1',
+      successor: 'nouveau',
+      new_meta: 'méta',
+    });
+    expect(calls.find((call) => call.path === '/rest/v1/rpc/accept_shares_from')?.body).toEqual({
+      predecessor: 'ancien',
+    });
+  });
+});
+
+describe('instance d’un lien', () => {
+  it('reconnaît la même instance malgré la casse et la barre finale', () => {
+    expect(sameInstanceUrl('https://Abc.supabase.co/', 'https://abc.supabase.co')).toBe(true);
+    expect(sameInstanceUrl('https://abc.supabase.co', 'https://abc.supabase.co.evil.example')).toBe(
+      false,
+    );
+  });
+
+  it('montre l’hôte réel de l’instance', () => {
+    expect(hostOf('https://Notes.Example.org/chemin')).toBe('notes.example.org');
+    expect(hostOf('https://user@evil.example')).toBe('user@evil.example');
+  });
+
+  it('ne tient pour officielle qu’une instance fixée à la compilation', () => {
+    expect(isDefaultInstance('https://evil.example')).toBe(false);
   });
 });

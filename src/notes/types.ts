@@ -128,6 +128,18 @@ export interface NoteStore {
   /** Note que l'élément local, toujours à envoyer, remplace la version `seq` du serveur. */
   setServerSeq(id: string, seq: number): Promise<void>;
   /**
+   * Plus récente date de modification (`updatedAt`) d'une version de
+   * l'élément échangée avec le serveur (reçue ou envoyée), gardée même après
+   * la suppression de l'élément ; `null` s'il n'a jamais été synchronisé.
+   */
+  getVersionFloor(id: string): Promise<number | null>;
+  /**
+   * La version `seq` du serveur est écartée, car plus ancienne que ce que cet
+   * appareil connaît : l'élément local, ou sa suppression s'il n'existe plus,
+   * sera renvoyé pour la remplacer.
+   */
+  requeue(id: string, seq: number): Promise<void>;
+  /**
    * L'élément a été envoyé tel que décrit par `entry` et porte le numéro `seq`.
    * Il reste « à envoyer » s'il a été modifié entre-temps.
    */
@@ -157,7 +169,13 @@ export interface NoteStore {
 export type SyncItem = { kind: 'note'; note: Note } | { kind: 'category'; category: Category };
 
 /** Changement reçu du serveur. */
-export type RemoteChange = SyncItem | { kind: 'deleted'; id: string };
+export type RemoteChange =
+  | SyncItem
+  /**
+   * `lastUpdatedAt` : date de modification de la dernière version supprimée,
+   * si l'appareil qui a supprimé la connaissait (absente des anciennes versions).
+   */
+  | { kind: 'deleted'; id: string; lastUpdatedAt?: number };
 
 type SyncMeta = {
   id: string;

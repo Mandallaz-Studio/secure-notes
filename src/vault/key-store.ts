@@ -1,6 +1,7 @@
 import * as SecureStore from 'expo-secure-store';
 
 import { fromHex, toHex } from '@/crypto/vectors';
+import { getPref, removePref, setPref } from '@/storage/prefs';
 
 /**
  * Stockage de la clé maîtresse dans le Keychain (iOS) ou le Keystore (Android).
@@ -11,7 +12,23 @@ import { fromHex, toHex } from '@/crypto/vectors';
  * système invalide la clé et il faut restaurer le coffre avec la phrase.
  */
 
-const KEY = 'vault.master-key';
+/**
+ * Deux emplacements, dont un seul est actif (`vault.key-slot`) : changer la
+ * protection de la clé, ou la remplacer, c'est écrire dans l'emplacement
+ * libre puis basculer. Une écriture qui échoue (demande d'empreinte annulée,
+ * erreur du Keystore, app tuée) laisse donc l'ancienne entrée intacte et
+ * active : la clé n'est jamais absente du téléphone, même un instant.
+ * Une entrée ne change pas de niveau de protection en place : il faut bien une
+ * nouvelle entrée.
+ */
+const SLOTS = ['vault.master-key', 'vault.master-key.b'] as const;
+type Slot = 0 | 1;
+/** Emplacement actif ; absent, c'est le premier (seul emplacement des premières versions). */
+const PREF_SLOT = 'vault.key-slot';
+
+function activeSlot(): Slot {
+  return getPref(PREF_SLOT) === '1' ? 1 : 0;
+}
 
 export const isPersistent = true;
 
@@ -19,14 +36,33 @@ export function canUseBiometrics(): boolean {
   return SecureStore.canUseBiometricAuthentication();
 }
 
+/**
+ * Enregistre la clé, avec ou sans protection biométrique, à la place de la
+ * clé actuelle.
+ * @throws si l'écriture échoue ; la clé enregistrée jusque-là reste alors en place.
+ */
 export async function saveMasterKey(masterKey: Uint8Array, biometric: boolean): Promise<void> {
-  // Supprimer d'abord : une entrée ne change pas de niveau de protection en place.
-  await SecureStore.deleteItemAsync(KEY);
-  await SecureStore.setItemAsync(KEY, toHex(masterKey), {
-    keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
-    requireAuthentication: biometric,
-    authenticationPrompt: 'Protéger le coffre',
-  });
+  const current = activeSlot();
+  const next: Slot = current === 0 ? 1 : 0;
+  // L'emplacement libre peut garder le reste d'un essai interrompu.
+  await SecureStore.deleteItemAsync(SLOTS[next]);
+  try {
+    await SecureStore.setItemAsync(SLOTS[next], toHex(masterKey), {
+      keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+      requireAuthentication: biometric,
+      authenticationPrompt: 'Protéger le coffre',
+    });
+    setPref(PREF_SLOT, String(next));
+    if (activeSlot() !== next) {
+      throw new Error("Le choix de l'emplacement de la clé n'a pas pu être enregistré.");
+    }
+  } catch (error) {
+    await SecureStore.deleteItemAsync(SLOTS[next]).catch(() => {});
+    throw error;
+  }
+  // L'ancienne entrée ne sert plus ; si elle résiste, elle sera effacée au
+  // prochain enregistrement (c'est alors l'emplacement libre).
+  await SecureStore.deleteItemAsync(SLOTS[current]).catch(() => {});
 }
 
 /**
@@ -34,7 +70,7 @@ export async function saveMasterKey(masterKey: Uint8Array, biometric: boolean): 
  * @throws si l'authentification biométrique échoue ou est annulée.
  */
 export async function loadMasterKey(biometric: boolean): Promise<Uint8Array | null> {
-  const hex = await SecureStore.getItemAsync(KEY, {
+  const hex = await SecureStore.getItemAsync(SLOTS[activeSlot()], {
     requireAuthentication: biometric,
     authenticationPrompt: 'Déverrouiller le coffre',
   });
@@ -42,7 +78,8 @@ export async function loadMasterKey(biometric: boolean): Promise<Uint8Array | nu
 }
 
 export async function deleteMasterKey(): Promise<void> {
-  await SecureStore.deleteItemAsync(KEY);
+  for (const slot of SLOTS) await SecureStore.deleteItemAsync(slot);
+  removePref(PREF_SLOT);
 }
 
 const RETIRING = 'vault.retiring';

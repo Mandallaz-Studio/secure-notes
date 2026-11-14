@@ -52,6 +52,11 @@ class FakeServer {
       },
     };
   }
+
+  /** Serveur malveillant : ressert un ancien chiffré sous un nouveau numéro. */
+  replay(row: RemoteRow): void {
+    this.rows.set(row.id, { ...row, seq: (this.seq += 1) });
+  }
 }
 
 let server: FakeServer;
@@ -196,6 +201,7 @@ describe('synchronisation entre deux appareils', () => {
     expect(openItem(note.id, server.rows.get(note.id)!, wrapKey)).toEqual({
       kind: 'deleted',
       id: note.id,
+      lastUpdatedAt: note.updatedAt,
     });
     expect(await tablet.listPending()).toEqual([]);
   });
@@ -594,5 +600,85 @@ describe('compte de synchronisation', () => {
     await expect(remote.putChunk('f1', 0, new Uint8Array([1]))).rejects.toBeInstanceOf(
       QuotaExceededError,
     );
+  });
+});
+
+describe('serveur qui ressert d’anciennes versions', () => {
+  const decrypted = (id: string) => openItem(id, server.rows.get(id)!, wrapKey);
+
+  it('n’applique pas une ancienne version d’une note, et rétablit la dernière', async () => {
+    const note = await write(phone, 'Compte', 'ancien code');
+    await sync(phone);
+    const before = { ...server.rows.get(note.id)! };
+    await edit(phone, note.id, 'nouveau code');
+    await sync(phone);
+    await sync(tablet);
+
+    server.replay(before);
+
+    expect(await sync(tablet)).toMatchObject({ pulled: 0, stale: 1 });
+    expect((await tablet.getNote(note.id))?.body).toBe('nouveau code');
+    // La version de l'appareil a été renvoyée : le serveur sert de nouveau la dernière.
+    expect(decrypted(note.id)).toMatchObject({ kind: 'note', note: { body: 'nouveau code' } });
+    expect(await sync(phone)).toMatchObject({ stale: 0 });
+    expect((await phone.getNote(note.id))?.body).toBe('nouveau code');
+  });
+
+  it('ne fait pas réapparaître une note supprimée définitivement', async () => {
+    const note = await write(phone, 'À détruire', 'secret');
+    await sync(phone);
+    const before = { ...server.rows.get(note.id)! };
+    await sync(tablet);
+    await tablet.deleteNote(note.id);
+    await sync(tablet);
+    await sync(phone);
+    expect(await phone.getNote(note.id)).toBeNull();
+
+    server.replay(before);
+
+    expect(await sync(phone)).toMatchObject({ pulled: 0, stale: 1 });
+    expect(await phone.getNote(note.id)).toBeNull();
+    // La suppression a été renvoyée.
+    expect(decrypted(note.id)).toMatchObject({ kind: 'deleted' });
+    await sync(tablet);
+    expect(await tablet.getNote(note.id)).toBeNull();
+  });
+
+  it('écarte une suppression qui vise une version plus ancienne', async () => {
+    const note = await write(phone, 'Gardée', 'v1');
+    await sync(phone);
+    await edit(phone, note.id, 'v2');
+    await sync(phone);
+    await sync(tablet);
+
+    server.replay({ id: note.id, seq: 0, ...sealDeletion(note.id, wrapKey, note.updatedAt) });
+
+    expect(await sync(tablet)).toMatchObject({ stale: 1 });
+    expect((await tablet.getNote(note.id))?.body).toBe('v2');
+    expect(decrypted(note.id)).toMatchObject({ kind: 'note', note: { body: 'v2' } });
+  });
+
+  it('accepte la modification d’un appareil dont l’horloge retarde', async () => {
+    const note = await write(phone, 'Horloge', 'v1');
+    await sync(phone);
+    await sync(tablet);
+    const late = await tablet.getNote(note.id);
+    // Une heure de retard : la nouvelle version reste plus récente que celle qu'elle remplace.
+    await tablet.saveNote(withText(late!, late!.title, 'v2', clock - 3_600_000));
+    await sync(tablet);
+
+    expect(await sync(phone)).toMatchObject({ pulled: 1, stale: 0 });
+    expect((await phone.getNote(note.id))?.body).toBe('v2');
+  });
+
+  it('accepte de nouveau la version déjà connue (rien ne change)', async () => {
+    const note = await write(phone, 'Stable');
+    await sync(phone);
+    await sync(tablet);
+
+    server.replay({ ...server.rows.get(note.id)! });
+
+    expect(await sync(tablet)).toMatchObject({ stale: 0 });
+    expect((await tablet.getNote(note.id))?.title).toBe('Stable');
   });
 });

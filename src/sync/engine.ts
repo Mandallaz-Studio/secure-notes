@@ -1,6 +1,6 @@
 import { newId } from '@/notes/model';
-import type { Note, NoteStore, RemoteChange, SyncEntry } from '@/notes/types';
-import { openItem, sealDeletion, sealItem, type SealedItem } from '@/sync/codec';
+import type { Category, Note, NoteStore, RemoteChange, SyncEntry, SyncItem } from '@/notes/types';
+import { idOf, openItem, sealDeletion, sealItem, type SealedItem } from '@/sync/codec';
 
 /**
  * Moteur de synchronisation.
@@ -17,6 +17,17 @@ import { openItem, sealDeletion, sealItem, type SealedItem } from '@/sync/codec'
  *
  * Rien de ce que dit le serveur n'est cru sans preuve : une ligne n'est
  * appliquée (suppression comprise) que si elle se déchiffre avec la clé du compte.
+ *
+ * Le chiffrement prouve qu'une version vient du compte, pas qu'elle est la
+ * dernière : un serveur malveillant pourrait renvoyer, sous un nouveau numéro,
+ * un ancien chiffré (retour à une version antérieure, note supprimée qui
+ * réapparaît). Chaque version porte donc une date de modification qui ne
+ * recule jamais (`touched`), et l'appareil retient la plus récente échangée
+ * pour chaque élément, même supprimé (`getVersionFloor`). Une version qui
+ * n'est pas plus récente, ou une suppression d'une version plus ancienne que
+ * celle de l'appareil, est écartée et la version de l'appareil renvoyée.
+ * Reste possible : que le serveur retienne des versions (non détectable sans
+ * manifeste signé de l'ensemble du compte).
  */
 
 export type RemoteRow = SealedItem & { id: string; seq: number };
@@ -41,6 +52,11 @@ export type SyncResult = {
   conflicts: number;
   /** Lignes du serveur illisibles (altérées ou d'une version plus récente), ignorées. */
   unreadable: number;
+  /**
+   * Versions périmées renvoyées par le serveur (ancienne version d'un élément,
+   * élément supprimé depuis), écartées : la version de l'appareil est renvoyée.
+   */
+  stale: number;
 };
 
 const PAGE_SIZE = 200;
@@ -64,6 +80,47 @@ function sameNote(a: Note, b: Note): boolean {
   );
 }
 
+function sameCategory(a: Category, b: Category): boolean {
+  return a.name === b.name;
+}
+
+function updatedAtOf(item: SyncItem): number {
+  return item.kind === 'note' ? item.note.updatedAt : item.category.updatedAt;
+}
+
+/** L'élément local contient-il déjà exactement cette version ? */
+function holds(local: SyncEntry | null, incoming: SyncItem): boolean {
+  if (local?.kind === 'note' && incoming.kind === 'note') {
+    return local.note.updatedAt === incoming.note.updatedAt && sameNote(local.note, incoming.note);
+  }
+  if (local?.kind === 'category' && incoming.kind === 'category') {
+    return (
+      local.category.updatedAt === incoming.category.updatedAt &&
+      sameCategory(local.category, incoming.category)
+    );
+  }
+  return false;
+}
+
+/**
+ * La ligne reçue est-elle plus ancienne que ce que l'appareil connaît ?
+ * Référence : la plus récente version échangée avec le serveur, et la version
+ * locale si elle n'a pas de modification en attente.
+ */
+async function isStale(store: NoteStore, local: SyncEntry | null, change: RemoteChange) {
+  // Une suppression en attente est toujours « à envoyer » (`dirty`).
+  const clean = local && !local.dirty ? updatedAtOf(local) : null;
+  const floor = await store.getVersionFloor(change.kind === 'deleted' ? change.id : idOf(change));
+  const known = Math.max(clean ?? -Infinity, floor ?? -Infinity);
+  if (change.kind === 'deleted') {
+    // Une suppression vise la dernière version connue de son auteur : si cet
+    // appareil, sans rien en attente, en a une plus récente, elle est périmée.
+    return clean !== null && change.lastUpdatedAt !== undefined && change.lastUpdatedAt < clean;
+  }
+  const version = updatedAtOf(change);
+  return version < known || (version === known && !holds(local, change));
+}
+
 function conflictCopy(note: Note, now: number): Note {
   return {
     ...note,
@@ -79,7 +136,7 @@ export async function synchronize(
   wrapKey: Uint8Array,
   now: () => number = Date.now,
 ): Promise<SyncResult> {
-  const result: SyncResult = { pulled: 0, pushed: 0, conflicts: 0, unreadable: 0 };
+  const result: SyncResult = { pulled: 0, pushed: 0, conflicts: 0, unreadable: 0, stale: 0 };
 
   if ((await store.getSyncValue(INSTANCE)) !== remote.instanceId) {
     await store.resetSync();
@@ -96,6 +153,11 @@ export async function synchronize(
       change = openItem(row.id, row, wrapKey);
     } catch {
       result.unreadable += 1;
+      return;
+    }
+    if (await isStale(store, local, change)) {
+      await store.requeue(row.id, row.seq);
+      result.stale += 1;
       return;
     }
     const incoming = change.kind === 'deleted' ? null : change;
@@ -160,9 +222,10 @@ export async function synchronize(
     }
   };
 
-  const send = (entry: SyncEntry): Promise<number | null> => {
+  const send = async (entry: SyncEntry): Promise<number | null> => {
     if (entry.kind === 'tombstone') {
-      return remote.update({ id: entry.id, ...sealDeletion(entry.id, wrapKey) }, entry.serverSeq);
+      const last = await store.getVersionFloor(entry.id);
+      return remote.update({ id: entry.id, ...sealDeletion(entry.id, wrapKey, last) }, entry.serverSeq);
     }
     const sealed = sealItem(entry, wrapKey);
     return entry.serverSeq === null

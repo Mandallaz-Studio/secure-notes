@@ -71,7 +71,8 @@ type Payload =
       attachments?: Attachment[];
     }
   | { v: number; t: 'category'; name: string; createdAt: number; updatedAt: number }
-  | { v: number; t: 'deleted' };
+  /** `last` : `updatedAt` de la version supprimée (absent des anciennes versions de l'app). */
+  | { v: number; t: 'deleted'; last?: number };
 
 export function idOf(item: SyncItem): string {
   return item.kind === 'note' ? item.note.id : item.category.id;
@@ -108,9 +109,24 @@ export function sealItem(item: SyncItem, wrapKey: Uint8Array): SealedItem {
   return seal(idOf(item), payloadOf(item), wrapKey);
 }
 
-/** Suppression définitive de l'élément `id`. */
-export function sealDeletion(id: string, wrapKey: Uint8Array): SealedItem {
-  return seal(id, { v: VERSION, t: 'deleted' }, wrapKey);
+/**
+ * Suppression définitive de l'élément `id`.
+ * @param lastUpdatedAt Date de modification de la dernière version connue de
+ *   l'élément : un appareil qui en a une plus récente sait que cette
+ *   suppression est périmée.
+ */
+export function sealDeletion(
+  id: string,
+  wrapKey: Uint8Array,
+  lastUpdatedAt: number | null = null,
+): SealedItem {
+  return seal(
+    id,
+    lastUpdatedAt === null
+      ? { v: VERSION, t: 'deleted' }
+      : { v: VERSION, t: 'deleted', last: lastUpdatedAt },
+    wrapKey,
+  );
 }
 
 const isText = (value: unknown): value is string => typeof value === 'string';
@@ -147,7 +163,9 @@ export function openItem(id: string, sealed: SealedItem, wrapKey: Uint8Array): R
     throw new Error(`Format d'élément inconnu (version ${String(payload.v)})`);
   }
   if (payload.t === 'deleted') {
-    return { kind: 'deleted', id };
+    return isTime(payload.last)
+      ? { kind: 'deleted', id, lastUpdatedAt: payload.last }
+      : { kind: 'deleted', id };
   }
   const { createdAt, updatedAt } = payload;
   if (!isTime(createdAt) || !isTime(updatedAt)) {

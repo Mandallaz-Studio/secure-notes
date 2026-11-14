@@ -87,43 +87,60 @@ export function createNote(
   };
 }
 
+/**
+ * Date de modification d'une nouvelle version : maintenant, mais toujours
+ * après la version qu'elle remplace, même si l'horloge de cet appareil
+ * retarde. La synchronisation s'en sert pour écarter une version plus
+ * ancienne que le serveur renverrait (voir `sync/engine.ts`).
+ */
+export function touched(previous: { updatedAt: number }, now: number): number {
+  return Math.max(now, previous.updatedAt + 1);
+}
+
 /** Une note jamais remplie n'est pas conservée. */
 export function isBlank(note: Pick<Note, 'title' | 'plainText' | 'attachments'>): boolean {
   return note.title.trim() === '' && note.plainText.trim() === '' && note.attachments.length === 0;
 }
 
 export function withAttachments(note: Note, attachments: Attachment[], now: number): Note {
-  return { ...note, attachments, updatedAt: now };
+  return { ...note, attachments, updatedAt: touched(note, now) };
 }
 
 export function withText(note: Note, title: string, text: string, now: number): Note {
-  return { ...note, title, body: text, bodyFormat: 'text', plainText: text, updatedAt: now };
+  return {
+    ...note,
+    title,
+    body: text,
+    bodyFormat: 'text',
+    plainText: text,
+    updatedAt: touched(note, now),
+  };
 }
 
 export function withTitle(note: Note, title: string, now: number): Note {
-  return { ...note, title, updatedAt: now };
+  return { ...note, title, updatedAt: touched(note, now) };
 }
 
 /** Remplace le contenu de la note, dans le format fourni par l'éditeur. */
 export function withBody(note: Note, content: BodyContent, now: number): Note {
-  return { ...note, ...content, updatedAt: now };
+  return { ...note, ...content, updatedAt: touched(note, now) };
 }
 
 export function withCategory(note: Note, categoryId: string | null, now: number): Note {
-  return { ...note, categoryId, updatedAt: now };
+  return { ...note, categoryId, updatedAt: touched(note, now) };
 }
 
 export function withArchived(note: Note, archived: boolean, now: number): Note {
-  return { ...note, archived, updatedAt: now };
+  return { ...note, archived, updatedAt: touched(note, now) };
 }
 
 export function withPinned(note: Note, pinned: boolean, now: number): Note {
-  return { ...note, pinned, updatedAt: now };
+  return { ...note, pinned, updatedAt: touched(note, now) };
 }
 
 /** Entre dans le dossier privé (`true`) ou en sort. */
 export function withHidden(note: Note, hidden: boolean, now: number): Note {
-  return { ...note, hidden, updatedAt: now };
+  return { ...note, hidden, updatedAt: touched(note, now) };
 }
 
 export const DEFAULT_SORT: NoteSort = 'updated-desc';
@@ -166,12 +183,12 @@ export function compareNotes(view: NoteView, sort: NoteSort = DEFAULT_SORT) {
 }
 
 export function trashed(note: Note, now: number): Note {
-  return { ...note, deletedAt: now, updatedAt: now };
+  return { ...note, deletedAt: now, updatedAt: touched(note, now) };
 }
 
 /** Sort la note de la corbeille ; elle retrouve son état archivé ou non. */
 export function restored(note: Note, now: number): Note {
-  return { ...note, deletedAt: null, updatedAt: now };
+  return { ...note, deletedAt: null, updatedAt: touched(note, now) };
 }
 
 export function createCategory(name: string, now: number): Category {
@@ -179,5 +196,5 @@ export function createCategory(name: string, now: number): Category {
 }
 
 export function renamed(category: Category, name: string, now: number): Category {
-  return { ...category, name: name.trim(), updatedAt: now };
+  return { ...category, name: name.trim(), updatedAt: touched(category, now) };
 }

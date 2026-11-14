@@ -32,6 +32,11 @@ export type SyncStatus = {
   error: string | null;
   /** Copies de conflit créées depuis l'ouverture du coffre. */
   conflicts: number;
+  /**
+   * Versions périmées que le serveur a renvoyées depuis l'ouverture du coffre
+   * (écartées) : signe d'une instance défaillante ou malveillante.
+   */
+  stale: number;
   /** Place occupée sur le serveur par les images et fichiers joints ; `null` : inconnue. */
   usage: StorageUsage | null;
   /** Images et fichiers que le serveur a refusés faute de place, à la dernière synchronisation. */
@@ -76,6 +81,7 @@ const OFF: SyncStatus = {
   lastSyncAt: null,
   error: null,
   conflicts: 0,
+  stale: 0,
   usage: null,
   overQuota: 0,
   blobError: null,
@@ -190,6 +196,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
                 lastSyncAt: Date.now(),
                 error: null,
                 conflicts: previous.conflicts + result.conflicts,
+                stale: previous.stale + result.stale,
                 usage: blobs?.usage ?? previous.usage,
                 overQuota: blobs ? blobs.overQuota : previous.overQuota,
                 blobError,

@@ -24,3 +24,24 @@ export function instanceForLink(current: ShareInstance): ShareInstance | null {
     ? null
     : { url: current.url, anonKey: current.anonKey };
 }
+
+/** Deux adresses désignent-elles la même instance (casse et barre finale ignorées) ? */
+export function sameInstanceUrl(a: string, b: string): boolean {
+  const canonical = (url: string) => url.trim().replace(/\/+$/, '').toLowerCase();
+  return canonical(a) === canonical(b);
+}
+
+/**
+ * L'instance est-elle celle de l'app (fixée à la compilation) ? Un lien peut
+ * désigner n'importe quelle autre instance, dont le contenu n'est vérifié par
+ * personne : le lecteur doit le savoir.
+ */
+export function isDefaultInstance(url: string): boolean {
+  const known = defaultInstance();
+  return known !== null && sameInstanceUrl(known.url, url);
+}
+
+/** Nom d'hôte d'une adresse d'instance, pour l'afficher. */
+export function hostOf(url: string): string {
+  return /^https?:\/\/([^/?#\s]+)/i.exec(url.trim())?.[1].toLowerCase() ?? url;
+}

@@ -1,7 +1,7 @@
 import { openShareMeta, sealShareMeta } from '@/share/codec';
 import type { NoteStore } from '@/notes/types';
 import { QuotaExceededError } from '@/sync/blobs';
-import { ShareTakenError, type SupabaseRemote, type SyncInstance } from '@/sync/supabase';
+import type { SupabaseRemote, SyncInstance } from '@/sync/supabase';
 
 /**
  * Retrait de l'ancien coffre, après « Recréer le coffre ».
@@ -12,12 +12,12 @@ import { ShareTakenError, type SupabaseRemote, type SyncInstance } from '@/sync/
  * le même identifiant (ils continuent de fonctionner), si celui-ci est
  * synchronisé sur la même instance ; sinon ils sont révoqués.
  *
- * Les destinataires d'un lien en connaissent l'identifiant et la clé : entre
- * la suppression d'un partage par l'ancien compte et sa recréation par le
- * nouveau, l'un d'eux pourrait déposer sa propre copie sous cet identifiant.
- * Chaque partage est donc transféré seul, suppression puis recréation
- * aussitôt, avant de fermer l'ancien compte ; un identifiant pris entre-temps
- * est détecté (`ShareTakenError`) et signalé.
+ * Les destinataires d'un lien en connaissent l'identifiant et la clé : si le
+ * lien cessait d'exister, même un instant, l'un d'eux pourrait déposer sa
+ * propre copie sous cet identifiant. Le serveur change donc le propriétaire
+ * de chaque partage en une seule transaction (`transferShare`), avec l'accord
+ * du nouveau compte, avant de fermer l'ancien. Un lien qui n'a pas pu passer
+ * (quota) est révoqué : son identifiant ne peut plus resservir.
  *
  * Chaque étape peut être rejouée : une interruption (réseau, app fermée) se
  * reprend au prochain essai.
@@ -57,14 +57,15 @@ export function parseRetiring(raw: string): RetiringVault | null {
 
 type OldRemote = Pick<
   SupabaseRemote,
+  | 'accountUserId'
   | 'listShares'
-  | 'getShareCiphertext'
+  | 'transferShare'
   | 'deleteShare'
   | 'listAttachmentIds'
   | 'deleteAttachment'
   | 'closeAccount'
 >;
-type NewRemote = Pick<SupabaseRemote, 'createShare'>;
+type NewRemote = Pick<SupabaseRemote, 'accountUserId' | 'acceptSharesFrom'>;
 
 export type RetireDeps = {
   /** Efface la base de l'ancien coffre sur cet appareil. */
@@ -84,11 +85,10 @@ export type RetireReport = {
   sharesMoved: number;
   /** Liens révoqués (nouveau compte non synchronisé, ou quota atteint). */
   sharesRevoked: number;
-  /** Liens dont l'identifiant a été pris par un autre compte pendant le transfert. */
-  sharesTaken: number;
 };
 
-type PendingShare = { id: string; ciphertext: string; meta: string };
+/** `meta` : métadonnées rechiffrées pour le nouveau compte. */
+type PendingShare = { id: string; meta: string };
 
 /**
  * Clé, dans l'état de synchronisation du nouveau coffre, des partages à recréer.
@@ -98,13 +98,11 @@ type PendingShare = { id: string; ciphertext: string; meta: string };
 export const PENDING_SHARES = 'retire.shares';
 
 export async function retireVault(deps: RetireDeps): Promise<RetireReport> {
-  const report: RetireReport = { sharesMoved: 0, sharesRevoked: 0, sharesTaken: 0 };
+  const report: RetireReport = { sharesMoved: 0, sharesRevoked: 0 };
   await deps.deleteOldDatabase();
   const old = deps.oldRemote;
   if (!old) return report;
 
-  // 1. Mettre de côté les partages à transférer, avant que la fermeture ne
-  //    les supprime. Déjà fait lors d'un essai précédent : on reprend la liste.
   const saved = await deps.store.getSyncValue(PENDING_SHARES);
   let pending: PendingShare[];
   if (saved !== null) {
@@ -112,14 +110,9 @@ export async function retireVault(deps: RetireDeps): Promise<RetireReport> {
   } else {
     pending = [];
     for (const share of await old.listShares()) {
-      const meta = openShareMeta(share.id, share.meta, deps.oldWrapKey);
-      const ciphertext = deps.newRemote && meta ? await old.getShareCiphertext(share.id) : null;
-      if (meta && ciphertext) {
-        pending.push({
-          id: share.id,
-          ciphertext,
-          meta: sealShareMeta(share.id, meta, deps.newWrapKey),
-        });
+      const meta = deps.newRemote ? openShareMeta(share.id, share.meta, deps.oldWrapKey) : null;
+      if (meta) {
+        pending.push({ id: share.id, meta: sealShareMeta(share.id, meta, deps.newWrapKey) });
       } else {
         report.sharesRevoked += 1;
       }
@@ -127,29 +120,27 @@ export async function retireVault(deps: RetireDeps): Promise<RetireReport> {
     await deps.store.setSyncValue(PENDING_SHARES, JSON.stringify(pending));
   }
 
-  // 2. Transférer les partages un par un, tant que l'ancien compte est ouvert.
-  if (deps.newRemote) {
+  if (deps.newRemote && pending.length > 0) {
+    const successor = await deps.newRemote.accountUserId();
+    await deps.newRemote.acceptSharesFrom(await old.accountUserId());
     while (pending.length > 0) {
       const share = pending[0];
-      // Sans effet si l'ancien compte l'a déjà supprimé (reprise après interruption).
-      await old.deleteShare(share.id);
       try {
-        await deps.newRemote.createShare(share.id, share.ciphertext, share.meta);
-        report.sharesMoved += 1;
+        if (await old.transferShare(share.id, successor, share.meta)) report.sharesMoved += 1;
+        else report.sharesRevoked += 1;
       } catch (cause) {
-        if (cause instanceof ShareTakenError) report.sharesTaken += 1;
-        else if (cause instanceof QuotaExceededError) report.sharesRevoked += 1;
-        else throw cause;
+        if (!(cause instanceof QuotaExceededError)) throw cause;
+        await old.deleteShare(share.id);
+        report.sharesRevoked += 1;
       }
       pending = pending.slice(1);
       await deps.store.setSyncValue(PENDING_SHARES, JSON.stringify(pending));
     }
   } else {
-    // Révoqués par la fermeture du compte.
+    // Supprimés avec le compte par close_account().
     report.sharesRevoked += pending.length;
   }
 
-  // 3. Supprimer les fichiers (blocs du bucket, puis lignes), puis fermer le compte.
   for (const id of await old.listAttachmentIds()) await old.deleteAttachment(id);
   await old.closeAccount();
   await deps.store.setSyncValue(PENDING_SHARES, '[]');

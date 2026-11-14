@@ -79,6 +79,17 @@ const MIGRATIONS: string[] = [
   `ALTER TABLE notes ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;`,
   // Version 5 : dossier privé.
   `ALTER TABLE notes ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0;`,
+  // Version 6 : versions déjà échangées avec le serveur, pour écarter une
+  // version plus ancienne qu'il renverrait (voir `getVersionFloor`). Les
+  // éléments à jour en donnent une première valeur.
+  `CREATE TABLE version_floor (
+     id TEXT PRIMARY KEY NOT NULL,
+     updated_at INTEGER NOT NULL
+   );
+   INSERT OR REPLACE INTO version_floor (id, updated_at)
+     SELECT id, updated_at FROM notes WHERE dirty = 0 AND server_seq IS NOT NULL;
+   INSERT OR REPLACE INTO version_floor (id, updated_at)
+     SELECT id, updated_at FROM categories WHERE dirty = 0 AND server_seq IS NOT NULL;`,
 ];
 
 type NoteRow = {
@@ -381,7 +392,7 @@ export class SqliteNoteStore implements NoteStore {
 
   async deleteCategory(id: string, now: number): Promise<void> {
     await this.db.runAsync(
-      'UPDATE notes SET category_id = NULL, updated_at = ?, dirty = 1 WHERE category_id = ?',
+      'UPDATE notes SET category_id = NULL, updated_at = MAX(?, updated_at + 1), dirty = 1 WHERE category_id = ?',
       [now, id],
     );
     await this.bury('categories', 'id = ?', [id]);
@@ -425,13 +436,50 @@ export class SqliteNoteStore implements NoteStore {
   async applyRemote(change: RemoteChange, seq: number): Promise<void> {
     if (change.kind === 'note') {
       await this.writeNote(change.note, seq);
+      await this.raiseFloor(change.note.id, change.note.updatedAt);
     } else if (change.kind === 'category') {
       await this.writeCategory(change.category, seq);
+      await this.raiseFloor(change.category.id, change.category.updatedAt);
     } else {
       await this.db.runAsync('DELETE FROM notes WHERE id = ?', [change.id]);
       await this.db.runAsync('DELETE FROM categories WHERE id = ?', [change.id]);
       await this.db.runAsync('DELETE FROM tombstones WHERE id = ?', [change.id]);
       await this.pruneBlobRefs();
+    }
+  }
+
+  private async raiseFloor(id: string, updatedAt: number): Promise<void> {
+    await this.db.runAsync(
+      `INSERT INTO version_floor (id, updated_at) VALUES (?, ?)
+       ON CONFLICT (id) DO UPDATE SET updated_at = MAX(updated_at, excluded.updated_at)`,
+      [id, updatedAt],
+    );
+  }
+
+  async getVersionFloor(id: string): Promise<number | null> {
+    const row = await this.db.getFirstAsync<{ updated_at: number }>(
+      'SELECT updated_at FROM version_floor WHERE id = ?',
+      [id],
+    );
+    return row?.updated_at ?? null;
+  }
+
+  async requeue(id: string, seq: number): Promise<void> {
+    let found = false;
+    for (const table of ['notes', 'categories']) {
+      const result = await this.db.runAsync(
+        `UPDATE ${table} SET server_seq = ?, dirty = 1 WHERE id = ?`,
+        [seq, id],
+      );
+      found ||= result.changes > 0;
+    }
+    if (found) {
+      await this.db.runAsync('DELETE FROM tombstones WHERE id = ?', [id]);
+    } else {
+      await this.db.runAsync('INSERT OR REPLACE INTO tombstones (id, server_seq) VALUES (?, ?)', [
+        id,
+        seq,
+      ]);
     }
   }
 
@@ -453,6 +501,7 @@ export class SqliteNoteStore implements NoteStore {
       entry.kind === 'note'
         ? ['notes', entry.note.updatedAt]
         : ['categories', entry.category.updatedAt];
+    await this.raiseFloor(entry.id, updatedAt);
     const result = await this.db.runAsync(
       `UPDATE ${table}
           SET server_seq = ?, dirty = CASE WHEN updated_at = ? THEN 0 ELSE 1 END

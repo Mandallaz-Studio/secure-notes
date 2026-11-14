@@ -590,6 +590,13 @@ function SyncSection() {
           « copie de conflit ».
         </Notice>
       )}
+      {status.stale > 0 && (
+        <Notice tone="warning" title={`${status.stale} version(s) périmée(s) écartée(s)`}>
+          Le serveur a renvoyé d&apos;anciennes versions de vos notes (ou des notes supprimées
+          depuis). Elles ont été ignorées et la version de cet appareil renvoyée. Si cela se
+          répète, l&apos;instance est peut-être défaillante ou compromise.
+        </Notice>
+      )}
       {status.state === 'error' && (
         <Notice tone="danger" title="Synchronisation en échec">
           {status.error}

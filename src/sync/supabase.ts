@@ -284,6 +284,12 @@ export class SupabaseRemote implements SyncRemote, BlobRemote {
     throw new SyncError(`Le stockage a refusé la requête (${SupabaseRemote.describe(reply)}).`);
   }
 
+  private static failOutdated(missing: string): never {
+    throw new SyncError(
+      `L'instance n'est pas à jour pour Secure Notes (${missing}) : appliquez les migrations du dossier supabase/migrations.`,
+    );
+  }
+
   private static fail(reply: Reply): never {
     const message = ((reply.body ?? {}) as Json).message;
     if (typeof message === 'string' && message.includes('storage_quota_exceeded')) {
@@ -470,6 +476,50 @@ export class SupabaseRemote implements SyncRemote, BlobRemote {
     if (typeof body.message === 'string' && body.message.includes('storage_quota_exceeded')) {
       throw new QuotaExceededError('Quota de stockage atteint');
     }
+    // Identifiant d'un lien révoqué : il ne peut plus resservir (voir la
+    // migration « share_tombstones »). Un identifiant neuf n'y tombe jamais.
+    if (typeof body.message === 'string' && body.message.includes('share_id_revoked')) {
+      throw new ShareTakenError();
+    }
+    SupabaseRemote.fail(reply);
+  }
+
+  /** Identifiant, sur l'instance, du compte connecté. */
+  async accountUserId(): Promise<string> {
+    await this.ensureSession();
+    const userId = this.session?.userId;
+    if (!userId) throw new SyncError("L'instance n'a pas indiqué l'identifiant du compte.");
+    return userId;
+  }
+
+  /** Accepte de recevoir les liens de partage du compte `predecessor` (voir `transferShare`). */
+  async acceptSharesFrom(predecessor: string): Promise<void> {
+    const reply = await this.rest('POST', '/rpc/accept_shares_from', { predecessor });
+    if (reply.status === 204 || reply.status === 200) return;
+    if (reply.status === 404) SupabaseRemote.failOutdated('transfert des liens absent');
+    SupabaseRemote.fail(reply);
+  }
+
+  /**
+   * Passe un partage de ce compte au compte `successor`, en une seule
+   * transaction : le lien ne cesse jamais d'exister, personne ne peut en
+   * prendre l'identifiant. Le successeur doit l'avoir accepté (`acceptSharesFrom`).
+   * @param meta Métadonnées du partage, rechiffrées pour le successeur.
+   * @returns `false` si ce compte n'a plus ce partage.
+   * @throws QuotaExceededError si le quota du successeur ne suffit pas.
+   */
+  async transferShare(id: string, successor: string, meta: string): Promise<boolean> {
+    const reply = await this.rest('POST', '/rpc/transfer_share', {
+      share_id: id,
+      successor,
+      new_meta: meta,
+    });
+    if (reply.status === 200) return reply.body === true;
+    const message = ((reply.body ?? {}) as Json).message;
+    if (typeof message === 'string' && message.includes('storage_quota_exceeded')) {
+      throw new QuotaExceededError('Quota de stockage atteint');
+    }
+    if (reply.status === 404) SupabaseRemote.failOutdated('transfert des liens absent');
     SupabaseRemote.fail(reply);
   }
 

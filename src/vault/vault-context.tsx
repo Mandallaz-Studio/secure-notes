@@ -58,11 +58,13 @@ type VaultContextValue = {
   /** Le coffre se verrouille : au démarrage, après 30 s en arrière-plan, et à la demande. */
   lockable: boolean;
   /**
-   * La clé n'a pas pu être lue au démarrage : le coffre est présenté verrouillé
-   * plutôt qu'absent, pour qu'une erreur passagère ne pousse pas à en créer un
-   * autre (ce qui effacerait cette clé).
+   * La clé n'a pas pu être lue au démarrage (`unreadable`), ou n'est plus sur
+   * l'appareil alors que le coffre y est (`missing`). Le coffre est présenté
+   * verrouillé plutôt qu'absent : une erreur passagère ne doit pas pousser à en
+   * créer un autre (ce qui effacerait cette clé), et une clé perdue se
+   * retrouve avec la phrase, sans effacer les notes de l'appareil.
    */
-  keyUnreadable: boolean;
+  keyProblem: Exclude<UnlockResult, 'ok' | 'cancelled'> | null;
   /** Ouvre un coffre à partir de l'entropie d'une phrase nouvelle ou saisie. */
   openWithEntropy: (entropy: Uint8Array) => Promise<void>;
   unlock: () => Promise<UnlockResult>;
@@ -77,6 +79,11 @@ type VaultContextValue = {
   setDeviceLockEnabled: (enabled: boolean) => Promise<boolean>;
   /** Efface la clé et les notes de cet appareil. Sans la phrase, elles sont perdues. */
   destroy: () => Promise<void>;
+  /**
+   * Clé introuvable : revient à l'accueil pour restaurer le coffre avec la
+   * phrase. Les notes de l'appareil sont gardées ; la même phrase les rouvre.
+   */
+  restoreWithPhrase: () => void;
   /**
    * Remplace le coffre par un nouveau, tiré d'une nouvelle phrase : tout le
    * contenu y est recopié, puis le nouveau coffre devient le coffre actif.
@@ -129,7 +136,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   const [biometricEnabled, setBiometricState] = useState(false);
   const [deviceLockEnabled, setDeviceLockState] = useState(false);
   const [deviceLockAvailable, setDeviceLockAvailable] = useState(false);
-  const [keyUnreadable, setKeyUnreadable] = useState(false);
+  const [keyProblem, setKeyProblem] = useState<VaultContextValue['keyProblem']>(null);
   const masterKey = useRef<Uint8Array | null>(null);
   const lockable = biometricEnabled || deviceLockEnabled;
 
@@ -144,7 +151,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     const derived = deriveVaultKeys(key);
     setKeys(derived);
     setAccountId(derived.accountId);
-    setKeyUnreadable(false);
+    setKeyProblem(null);
     setStatus('unlocked');
     return derived;
   };
@@ -177,7 +184,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         // Erreur du système, peut-être passagère : surtout ne pas conclure à
         // l'absence de coffre. L'écran de verrouillage propose de réessayer.
         if (cancelled) return;
-        setKeyUnreadable(true);
+        setKeyProblem('unreadable');
         setStatus('locked');
         return;
       }
@@ -185,10 +192,11 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       if (key) {
         adopt(key);
       } else {
-        // Marqueur présent mais clé absente (réinstallation, par exemple).
-        removePref(PREF_ACCOUNT);
-        setAccountId(null);
-        setStatus('empty');
+        // Marqueur présent mais clé absente : ne pas conclure à l'absence de
+        // coffre, sa base est peut-être encore là. L'écran de verrouillage
+        // propose de le restaurer avec la phrase, sans rien effacer.
+        setKeyProblem('missing');
+        setStatus('locked');
       }
     })();
     return () => {
@@ -296,8 +304,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     try {
       await saveMasterKey(nextKey, biometricEnabled);
     } catch (error) {
-      // `saveMasterKey` efface l'ancienne entrée avant d'écrire : la remettre.
-      await saveMasterKey(previous, biometricEnabled).catch(() => saveMasterKey(previous, false));
+      // L'ancienne clé est restée en place (voir `saveMasterKey`).
       await deleteRetiring();
       await discardNoteStore(next.accountId);
       nextKey.fill(0);
@@ -325,7 +332,19 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     setAccountId(null);
     setBiometricState(false);
     setDeviceLockState(false);
-    setKeyUnreadable(false);
+    setKeyProblem(null);
+    setStatus('empty');
+  };
+
+  const restoreWithPhrase = () => {
+    forget();
+    removePref(PREF_ACCOUNT);
+    removePref(PREF_BIOMETRIC);
+    removePref(PREF_DEVICE_LOCK);
+    setAccountId(null);
+    setBiometricState(false);
+    setDeviceLockState(false);
+    setKeyProblem(null);
     setStatus('empty');
   };
 
@@ -340,13 +359,14 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         deviceLockEnabled,
         deviceLockAvailable,
         lockable,
-        keyUnreadable,
+        keyProblem,
         openWithEntropy,
         unlock,
         lock,
         setBiometricEnabled,
         setDeviceLockEnabled,
         destroy,
+        restoreWithPhrase,
         recreate,
       }}>
       {children}
