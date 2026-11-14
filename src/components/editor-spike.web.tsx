@@ -8,7 +8,7 @@ import { Spacing } from '@/constants/theme';
 export function EditorSpike() {
   return (
     <ThemedView style={styles.container}>
-      <ThemedText themeColor="textSecondary">
+      <ThemedText themeColor="inkMuted">
         L&apos;éditeur n&apos;est disponible que sur iOS et Android.
       </ThemedText>
     </ThemedView>

@@ -1,10 +1,14 @@
 import { Stack, useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { Platform } from 'react-native';
+import { Platform, StyleSheet, View } from 'react-native';
 
+import { Logo } from '@/components/logo';
+import { Notice } from '@/components/notice';
 import { RichView } from '@/components/rich-view';
 import { Screen } from '@/components/screen';
 import { ThemedText } from '@/components/themed-text';
+import { Spacing } from '@/constants/theme';
+import { useTheme } from '@/hooks/use-theme';
 import { cryptoReady } from '@/crypto/aead';
 import { isShareId, openShare, parseShareFragment, type SharedNote } from '@/share/codec';
 import { defaultInstance } from '@/share/config';
@@ -60,6 +64,7 @@ export default function SharedNoteScreen() {
   const id = params.id;
   const fragment =
     params['#'] ?? (Platform.OS === 'web' && typeof window !== 'undefined' ? window.location.hash : '');
+  const theme = useTheme();
   const [state, setState] = useState<State>({ phase: 'loading' });
 
   useEffect(() => {
@@ -76,9 +81,13 @@ export default function SharedNoteScreen() {
     <Screen>
       <Stack.Screen options={{ title: 'Note partagée' }} />
       {state.phase === 'loading' && (
-        <ThemedText themeColor="textSecondary">Déchiffrement…</ThemedText>
+        <ThemedText themeColor="inkMuted">Déchiffrement…</ThemedText>
       )}
-      {state.phase === 'error' && <ThemedText themeColor="danger">{state.message}</ThemedText>}
+      {state.phase === 'error' && (
+        <Notice tone="danger" title="Note indisponible">
+          {state.message}
+        </Notice>
+      )}
       {state.phase === 'ready' && (
         <>
           {state.note.title !== '' && (
@@ -87,12 +96,26 @@ export default function SharedNoteScreen() {
             </ThemedText>
           )}
           <RichView doc={state.note.doc} />
-          <ThemedText type="small" themeColor="textSecondary">
-            Copie partagée le {new Date(state.note.sharedAt).toLocaleDateString('fr-FR')} avec
+          <View style={[styles.footer, { borderColor: theme.border }]}>
+            <Logo size={24} />
+            <ThemedText type="caption" themeColor="inkSubtle" style={styles.flex}>
+              Copie partagée le {new Date(state.note.sharedAt).toLocaleDateString('fr-FR')} avec
             Secure Notes. Elle a été déchiffrée sur cet appareil : le serveur ne peut pas la lire.
-          </ThemedText>
+            </ThemedText>
+          </View>
         </>
       )}
     </Screen>
   );
 }
+
+const styles = StyleSheet.create({
+  footer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    paddingTop: Spacing.three,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  flex: { flex: 1 },
+});

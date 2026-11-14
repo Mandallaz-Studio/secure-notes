@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { Button } from '@/components/button';
+import { Notice } from '@/components/notice';
 import { Screen } from '@/components/screen';
 import { ScreenCaptureGuard } from '@/components/screen-capture-guard';
 import { SecretTextField } from '@/components/text-field';
@@ -55,8 +56,10 @@ export default function RestoreVaultScreen() {
     <Screen>
       <ScreenCaptureGuard />
       <View style={styles.block}>
-        <ThemedText type="title">Restaurer un coffre</ThemedText>
-        <ThemedText themeColor="textSecondary">
+        <ThemedText type="title" accessibilityRole="header">
+          Restaurer un coffre
+        </ThemedText>
+        <ThemedText themeColor="inkMuted">
           Saisissez vos 24 mots dans l&apos;ordre, séparés par des espaces. Les accents et les
           majuscules sont facultatifs.
         </ThemedText>
@@ -73,10 +76,10 @@ export default function RestoreVaultScreen() {
           }}
           style={styles.input}
         />
-        <ThemedText type="small" themeColor="textSecondary">
+        <ThemedText type="caption" themeColor="inkSubtle">
           {words.length} / {WORD_COUNT} mots
         </ThemedText>
-        {error && <ThemedText themeColor="danger">{error}</ThemedText>}
+        {error && <Notice tone="danger">{error}</Notice>}
       </View>
       <Button
         label="Restaurer"

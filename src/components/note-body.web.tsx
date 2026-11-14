@@ -29,7 +29,7 @@ export function NoteBody({ initial, editable, onChange, ref }: NoteBodyProps) {
     <TextInput
       accessibilityLabel="Contenu de la note"
       placeholder="Écrivez ici…"
-      placeholderTextColor={theme.textSecondary}
+      placeholderTextColor={theme.inkMuted}
       value={text}
       editable={editable && isPlain}
       multiline
@@ -38,7 +38,7 @@ export function NoteBody({ initial, editable, onChange, ref }: NoteBodyProps) {
         setText(value);
         onChange(content(value));
       }}
-      style={[styles.body, { color: theme.text }]}
+      style={[styles.body, { color: theme.ink }]}
     />
   );
 }

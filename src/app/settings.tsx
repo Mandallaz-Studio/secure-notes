@@ -1,13 +1,33 @@
-import { Link, useRouter } from 'expo-router';
+import { useRouter } from 'expo-router';
+import {
+  CloudOff,
+  Download,
+  FlaskConical,
+  Fingerprint,
+  KeyRound,
+  Link as LinkIcon,
+  Lock,
+  Monitor,
+  Moon,
+  PenLine,
+  RefreshCw,
+  Sun,
+  Trash2,
+  Upload,
+} from 'lucide-react-native';
 import { useEffect, useState } from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet, Switch, View } from 'react-native';
 
 import { Button } from '@/components/button';
 import { confirmDestructive } from '@/components/confirm';
+import { ListGroup, ListItem, ListRow } from '@/components/list-group';
+import { Notice } from '@/components/notice';
+import { ProgressBar } from '@/components/progress-bar';
 import { RetirementNotice } from '@/components/retirement-notice';
+import { SegmentedControl, type SegmentedOption } from '@/components/segmented-control';
 import { TextField } from '@/components/text-field';
 import { ThemedText } from '@/components/themed-text';
-import { NotePalette, Spacing } from '@/constants/theme';
+import { MaxContentWidth, NotePalette, Radius, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { formatBytes, newImageCache, toStoredImages } from '@/notes/blobs';
 import { buildFullExport, fullExportFileName } from '@/notes/full-export';
@@ -21,94 +41,101 @@ import { useSync } from '@/sync/sync-context';
 import { useThemePreference, type ThemePreference } from '@/theme/theme-preference';
 import { useVault } from '@/vault/vault-context';
 
-const THEME_OPTIONS: { value: ThemePreference; label: string }[] = [
-  { value: 'system', label: 'Système' },
-  { value: 'light', label: 'Clair' },
-  { value: 'dark', label: 'Sombre' },
+const THEME_OPTIONS: SegmentedOption<ThemePreference>[] = [
+  { value: 'system', label: 'Auto', icon: Monitor },
+  { value: 'light', label: 'Clair', icon: Sun },
+  { value: 'dark', label: 'Sombre', icon: Moon },
 ];
 
 export default function SettingsScreen() {
   const theme = useTheme();
+  const router = useRouter();
   const { preference, scheme, setPreference } = useThemePreference();
   const palette = NotePalette[scheme];
 
   return (
     <ScrollView
-      style={{ backgroundColor: theme.background }}
+      style={{ backgroundColor: theme.canvas }}
       contentContainerStyle={styles.content}
-      contentInsetAdjustmentBehavior="automatic">
-      <View style={styles.section}>
-        <ThemedText type="subtitle">Thème</ThemedText>
-        <View style={styles.row}>
-          {THEME_OPTIONS.map((option) => (
-            <View key={option.value} style={styles.flex}>
-              <Button
-                label={option.label}
-                selected={preference === option.value}
-                onPress={() => setPreference(option.value)}
-              />
+      contentInsetAdjustmentBehavior="automatic"
+      keyboardShouldPersistTaps="handled">
+      <View style={styles.inner}>
+        <ListGroup title="Apparence">
+          <ListItem>
+            <SegmentedControl options={THEME_OPTIONS} value={preference} onChange={setPreference} />
+          </ListItem>
+        </ListGroup>
+
+        <VaultSection />
+
+        <SyncSection />
+
+        <StorageSection />
+
+        <ListGroup
+          title="Partage"
+          footer="Les liens créés depuis une note restent actifs jusqu’à leur révocation.">
+          <ListRow
+            icon={LinkIcon}
+            label="Liens de partage"
+            chevron
+            onPress={() =>
+              router.push({ pathname: '/share/[noteId]', params: { noteId: 'all' } })
+            }
+          />
+        </ListGroup>
+
+        {markdownFilesSupported && <ImportSection />}
+
+        {markdownFilesSupported && <ExportSection />}
+
+        <ListGroup
+          title="Couleurs des notes"
+          footer="Les mêmes jetons donnent des teintes différentes selon le thème.">
+          <ListItem>
+            <View style={styles.wrap}>
+              {Object.entries(palette.text).map(([name, color]) => (
+                <ThemedText key={name} type="label" style={{ color }}>
+                  {name}
+                </ThemedText>
+              ))}
             </View>
-          ))}
-        </View>
+            <View style={styles.wrap}>
+              {Object.entries(palette.highlight).map(([name, color]) => (
+                <ThemedText key={name} type="label" style={[styles.highlight, { backgroundColor: color }]}>
+                  {name}
+                </ThemedText>
+              ))}
+            </View>
+          </ListItem>
+        </ListGroup>
+
+        {__DEV__ && (
+          <ListGroup title="Essais techniques">
+            <ListRow
+              icon={FlaskConical}
+              label="Chiffrement (libsodium)"
+              chevron
+              onPress={() => router.push('/dev/crypto')}
+            />
+            <ListRow
+              icon={PenLine}
+              label="Éditeur (TenTap)"
+              chevron
+              onPress={() => router.push('/dev/editor')}
+            />
+          </ListGroup>
+        )}
+
+        <DestroySection />
       </View>
-
-      {markdownFilesSupported && <ImportSection />}
-
-      {markdownFilesSupported && <ExportSection />}
-
-      <SyncSection />
-
-      <StorageSection />
-
-      <View style={styles.section}>
-        <ThemedText type="subtitle">Partage</ThemedText>
-        <ThemedText themeColor="textSecondary" type="small">
-          Les liens créés depuis une note restent actifs jusqu’à leur révocation.
-        </ThemedText>
-        <Link href={{ pathname: '/share/[noteId]', params: { noteId: 'all' } }} asChild>
-          <Button label="Liens de partage" />
-        </Link>
-      </View>
-
-      <VaultSection />
-
-      <View style={styles.section}>
-        <ThemedText type="subtitle">Couleurs des notes</ThemedText>
-        <ThemedText themeColor="textSecondary" type="small">
-          Les mêmes jetons donnent des teintes différentes selon le thème.
-        </ThemedText>
-        <View style={styles.wrap}>
-          {Object.entries(palette.text).map(([name, color]) => (
-            <ThemedText key={name} style={{ color, fontWeight: 600 }}>
-              {name}
-            </ThemedText>
-          ))}
-        </View>
-        <View style={styles.wrap}>
-          {Object.entries(palette.highlight).map(([name, color]) => (
-            <ThemedText key={name} style={[styles.highlight, { backgroundColor: color }]}>
-              {name}
-            </ThemedText>
-          ))}
-        </View>
-      </View>
-
-      {__DEV__ && (
-        <View style={styles.section}>
-          <ThemedText type="subtitle">Essais techniques</ThemedText>
-          <Link href="/dev/crypto" asChild>
-            <Button label="Chiffrement (libsodium)" />
-          </Link>
-          <Link href="/dev/editor" asChild>
-            <Button label="Éditeur (TenTap)" />
-          </Link>
-        </View>
-      )}
     </ScrollView>
   );
 }
 
 function VaultSection() {
+  const theme = useTheme();
+  const router = useRouter();
   const vault = useVault();
   const [error, setError] = useState<string | null>(null);
 
@@ -120,6 +147,53 @@ function VaultSection() {
       setError("La protection n'a pas pu être modifiée (authentification annulée ?).");
     }
   };
+
+  return (
+    <>
+      <ListGroup
+        title="Coffre"
+        footer={`Compte ${vault.accountId?.slice(0, 8)}… · La phrase de récupération n’est pas conservée et ne peut plus être affichée.`}>
+        {vault.biometricAvailable ? (
+          <ListRow
+            icon={Fingerprint}
+            label="Verrouillage biométrique"
+            trailing={
+              <Switch
+                accessibilityLabel="Verrouillage biométrique"
+                value={vault.biometricEnabled}
+                onValueChange={() => void toggleBiometric()}
+                trackColor={{ true: theme.accent, false: theme.surfaceSunken }}
+                thumbColor={vault.biometricEnabled ? theme.onAccent : theme.surface}
+                ios_backgroundColor={theme.surfaceSunken}
+              />
+            }
+          />
+        ) : (
+          <ListRow
+            icon={Fingerprint}
+            label="Verrouillage biométrique"
+            detail="Indisponible : aucune empreinte ni visage enregistré sur cet appareil."
+          />
+        )}
+        {vault.biometricAvailable && vault.biometricEnabled && (
+          <ListRow icon={Lock} label="Verrouiller maintenant" tone="accent" onPress={vault.lock} />
+        )}
+        <ListRow
+          icon={KeyRound}
+          label="Recréer le coffre"
+          detail="Phrase perdue, ou vue par quelqu’un d’autre ? Nouvelle phrase, mêmes notes."
+          chevron
+          onPress={() => router.push('/recreate')}
+        />
+      </ListGroup>
+      {error && <Notice tone="danger">{error}</Notice>}
+      <RetirementNotice />
+    </>
+  );
+}
+
+function DestroySection() {
+  const vault = useVault();
 
   const destroy = async () => {
     const confirmed = await confirmDestructive({
@@ -134,55 +208,17 @@ function VaultSection() {
   };
 
   return (
-    <View style={styles.section}>
-      <ThemedText type="subtitle">Coffre</ThemedText>
-      <ThemedText themeColor="textSecondary" type="small">
-        Identifiant du compte : {vault.accountId?.slice(0, 8)}…
-      </ThemedText>
-      <ThemedText themeColor="textSecondary" type="small">
-        La phrase de récupération n&apos;est pas conservée et ne peut plus être affichée.
-      </ThemedText>
-      {vault.biometricAvailable ? (
-        <>
-          <Button
-            label={
-              vault.biometricEnabled
-                ? 'Désactiver le verrouillage biométrique'
-                : 'Activer le verrouillage biométrique'
-            }
-            onPress={toggleBiometric}
-          />
-          {vault.biometricEnabled && <Button label="Verrouiller maintenant" onPress={vault.lock} />}
-        </>
-      ) : (
-        <ThemedText themeColor="textSecondary" type="small">
-          Verrouillage biométrique indisponible : aucune empreinte ni visage enregistré sur cet
-          appareil.
-        </ThemedText>
-      )}
-      {error && <ThemedText themeColor="danger">{error}</ThemedText>}
-      <ThemedText themeColor="textSecondary" type="small">
-        Phrase perdue, ou vue par quelqu&apos;un d&apos;autre ? Recréez le coffre : nouvelle phrase,
-        mêmes notes.
-      </ThemedText>
-      <Link href="/recreate" asChild>
-        <Button label="Recréer le coffre avec une nouvelle phrase" />
-      </Link>
-      <RetirementNotice />
-      <Button label="Supprimer le coffre de cet appareil" variant="danger" onPress={destroy} />
-    </View>
+    <ListGroup>
+      <ListRow icon={Trash2} label="Supprimer le coffre de cet appareil" tone="danger" onPress={destroy} />
+    </ListGroup>
   );
 }
 
 const styles = StyleSheet.create({
-  content: { padding: Spacing.three, gap: Spacing.five },
-  section: { gap: Spacing.two },
-  row: { flexDirection: 'row', gap: Spacing.two },
-  wrap: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.three },
-  flex: { flex: 1 },
-  highlight: { paddingHorizontal: Spacing.two, borderRadius: 4 },
-  gauge: { height: 8, borderRadius: 4, overflow: 'hidden' },
-  gaugeFill: { height: 8, borderRadius: 4 },
+  content: { padding: Spacing.three, paddingBottom: Spacing.six, alignItems: 'center' },
+  inner: { width: '100%', maxWidth: MaxContentWidth, gap: Spacing.four },
+  wrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
+  highlight: { paddingHorizontal: Spacing.two, borderRadius: Radius.sm, overflow: 'hidden' },
 });
 
 function ImportSection() {
@@ -216,19 +252,21 @@ function ImportSection() {
   };
 
   return (
-    <View style={styles.section}>
-      <ThemedText type="subtitle">Import</ThemedText>
-      <ThemedText themeColor="textSecondary" type="small">
-        Crée une note à partir d&apos;un fichier texte : Markdown (.md), texte brut (.txt), RTF, ou
-        tout autre format texte (CSV, JSON, code…). La mise en forme Markdown est conservée.
-      </ThemedText>
-      <Button label="Importer un fichier" disabled={!store} onPress={importFile} />
-      {error && (
-        <ThemedText themeColor="danger" type="small">
-          {error}
-        </ThemedText>
-      )}
-    </View>
+    <>
+      <ListGroup
+        title="Import"
+        footer="Markdown (.md), texte brut (.txt), RTF, ou tout autre format texte (CSV, JSON, code…). La mise en forme Markdown est conservée.">
+        <ListRow
+          icon={Upload}
+          label="Importer un fichier"
+          detail="Crée une note à partir d’un fichier texte."
+          tone="accent"
+          disabled={!store}
+          onPress={importFile}
+        />
+      </ListGroup>
+      {error && <Notice tone="danger">{error}</Notice>}
+    </>
   );
 }
 
@@ -269,29 +307,27 @@ function ExportSection() {
   };
 
   return (
-    <View style={styles.section}>
-      <ThemedText type="subtitle">Export</ThemedText>
-      <ThemedText themeColor="textSecondary" type="small">
-        Une archive zip avec toutes les notes (Markdown, rangées par catégorie), leurs images et
-        fichiers joints, et un fichier JSON qui conserve toute la mise en forme.
-      </ThemedText>
-      <Button
-        label={busy ? 'Préparation de l’archive…' : 'Exporter toutes les notes'}
-        disabled={!store || busy}
-        onPress={exportAll}
-      />
+    <>
+      <ListGroup
+        title="Export"
+        footer="Une archive zip avec toutes les notes (Markdown, rangées par catégorie), leurs images et fichiers joints, et un fichier JSON qui conserve toute la mise en forme.">
+        <ListRow
+          icon={Download}
+          label={busy ? 'Préparation de l’archive…' : 'Exporter toutes les notes'}
+          tone="accent"
+          disabled={!store || busy}
+          onPress={exportAll}
+        />
+      </ListGroup>
       {report && (
-        <ThemedText themeColor={report.danger ? 'danger' : 'textSecondary'} type="small">
-          {report.text}
-        </ThemedText>
+        <Notice tone={report.danger ? 'warning' : 'success'}>{report.text}</Notice>
       )}
-    </View>
+    </>
   );
 }
 
 /** Place occupée par les images et les fichiers joints. */
 function StorageSection() {
-  const theme = useTheme();
   const { store, revision } = useNotes();
   const { config, status } = useSync();
   const [localBytes, setLocalBytes] = useState<number | null>(null);
@@ -314,48 +350,38 @@ function StorageSection() {
   const ratio = usage && usage.quotaBytes > 0 ? Math.min(1, usage.usedBytes / usage.quotaBytes) : 0;
 
   return (
-    <View style={styles.section}>
-      <ThemedText type="subtitle">Stockage</ThemedText>
-      <ThemedText themeColor="textSecondary" type="small">
-        Images et fichiers joints sur cet appareil :{' '}
-        {localBytes === null ? '…' : formatBytes(localBytes)}
-      </ThemedText>
-      {usage && (
-        <>
-          <View
-            accessibilityRole="progressbar"
-            accessibilityValue={{ min: 0, max: 100, now: Math.round(ratio * 100) }}
-            style={[styles.gauge, { backgroundColor: theme.backgroundElement }]}>
-            <View
-              style={[
-                styles.gaugeFill,
-                { width: `${ratio * 100}%`, backgroundColor: ratio > 0.9 ? theme.danger : theme.tint },
-              ]}
+    <>
+      <ListGroup title="Stockage">
+        <ListRow
+          label="Sur cet appareil"
+          detail="Images et fichiers joints"
+          value={localBytes === null ? '…' : formatBytes(localBytes)}
+        />
+        {usage && (
+          <ListItem>
+            <ProgressBar
+              label="Sur le serveur"
+              ratio={ratio}
+              valueLabel={`${formatBytes(usage.usedBytes)} sur ${formatBytes(usage.quotaBytes)}`}
             />
-          </View>
-          <ThemedText themeColor="textSecondary" type="small">
-            Sur le serveur : {formatBytes(usage.usedBytes)} utilisés sur{' '}
-            {formatBytes(usage.quotaBytes)}
-          </ThemedText>
-        </>
-      )}
-      {config.enabled && !usage && status.lastSyncAt !== null && !status.blobError && (
-        <ThemedText themeColor="textSecondary" type="small">
-          Espace utilisé sur le serveur : inconnu (instance pas à jour).
-        </ThemedText>
-      )}
+          </ListItem>
+        )}
+        {config.enabled && !usage && status.lastSyncAt !== null && !status.blobError && (
+          <ListRow label="Sur le serveur" value="Inconnu" detail="Instance pas à jour." />
+        )}
+      </ListGroup>
       {config.enabled && status.overQuota > 0 && (
-        <ThemedText themeColor="danger" type="small">
-          Quota atteint : {status.overQuota} image(s) ou fichier(s) restent sur cet appareil sans
-          être synchronisés. Supprimez des fichiers joints ou faites augmenter le quota du compte.
-        </ThemedText>
+        <Notice tone="warning" title="Quota atteint">
+          {status.overQuota} image(s) ou fichier(s) restent sur cet appareil sans être
+          synchronisés. Supprimez des fichiers joints ou faites augmenter le quota du compte.
+        </Notice>
       )}
       {config.enabled && status.blobError && (
-        <ThemedText themeColor="danger" type="small">
-          Images et fichiers joints non synchronisés : {status.blobError}
-        </ThemedText>
+        <Notice tone="danger" title="Images et fichiers joints non synchronisés">
+          {status.blobError}
+        </Notice>
       )}
-    </View>
+    </>
   );
 }
 
@@ -390,73 +416,79 @@ function SyncSection() {
 
   if (!config.enabled) {
     return (
-      <View style={styles.section}>
-        <ThemedText type="subtitle">Synchronisation</ThemedText>
-        <ThemedText themeColor="textSecondary" type="small">
-          Désactivée : aucune donnée ne quitte cet appareil. Une fois activée, vos notes sont
-          chiffrées ici avant d&apos;être envoyées ; le serveur ne peut pas les lire.
-        </ThemedText>
-        <TextField
-          accessibilityLabel="Adresse de l'instance Supabase"
-          placeholder="https://exemple.supabase.co"
-          value={url}
-          onChangeText={setUrl}
-          autoCapitalize="none"
-          autoCorrect={false}
-          keyboardType="url"
+      <ListGroup
+        title="Synchronisation"
+        footer="Une fois activée, vos notes sont chiffrées ici avant d’être envoyées ; le serveur ne peut pas les lire.">
+        <ListRow
+          icon={CloudOff}
+          label="Désactivée"
+          detail="Aucune donnée ne quitte cet appareil."
         />
-        <TextField
-          accessibilityLabel="Clé publique de l'instance"
-          placeholder="Clé publique (anon) de l'instance"
-          value={anonKey}
-          onChangeText={setAnonKey}
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-        <Button
-          label={busy ? 'Connexion…' : 'Activer la synchronisation'}
-          disabled={busy || url.trim() === '' || anonKey.trim() === ''}
-          onPress={activate}
-        />
-        {error && (
-          <ThemedText themeColor="danger" type="small">
-            {error}
-          </ThemedText>
-        )}
-      </View>
+        <ListItem>
+          <TextField
+            label="Adresse de l'instance Supabase"
+            placeholder="https://exemple.supabase.co"
+            hint="Tous vos appareils doivent utiliser exactement la même adresse."
+            value={url}
+            onChangeText={setUrl}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+          />
+          <TextField
+            label="Clé publique de l'instance"
+            placeholder="Clé publique (anon)"
+            value={anonKey}
+            onChangeText={setAnonKey}
+            autoCapitalize="none"
+            autoCorrect={false}
+            error={error}
+          />
+          <Button
+            label={busy ? 'Connexion…' : 'Activer la synchronisation'}
+            variant="primary"
+            disabled={busy || url.trim() === '' || anonKey.trim() === ''}
+            onPress={activate}
+          />
+        </ListItem>
+      </ListGroup>
     );
   }
 
   return (
-    <View style={styles.section}>
-      <ThemedText type="subtitle">Synchronisation</ThemedText>
-      <ThemedText themeColor="textSecondary" type="small">
-        Instance : {config.url}
-      </ThemedText>
-      <ThemedText themeColor="textSecondary" type="small">
-        {status.state === 'syncing'
-          ? 'Synchronisation en cours…'
-          : status.lastSyncAt
-            ? `Dernière synchronisation à ${new Date(status.lastSyncAt).toLocaleTimeString()}`
-            : 'Pas encore synchronisé'}
-      </ThemedText>
+    <>
+      <ListGroup title="Synchronisation">
+        <ListRow label="Instance" value={config.url.replace(/^https?:\/\//, '')} />
+        <ListRow
+          label="État"
+          value={
+            status.state === 'syncing'
+              ? 'En cours…'
+              : status.lastSyncAt
+                ? `À ${new Date(status.lastSyncAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`
+                : 'Pas encore synchronisé'
+          }
+        />
+        <ListRow
+          icon={RefreshCw}
+          label="Synchroniser maintenant"
+          tone="accent"
+          disabled={status.state === 'syncing' || status.state === 'off'}
+          onPress={syncNow}
+        />
+        <ListRow icon={CloudOff} label="Désactiver la synchronisation" onPress={deactivate} />
+      </ListGroup>
       {status.conflicts > 0 && (
-        <ThemedText themeColor="textSecondary" type="small">
-          {status.conflicts} note(s) modifiée(s) sur deux appareils : l&apos;autre version est
-          conservée dans une « copie de conflit ».
-        </ThemedText>
+        <Notice tone="info" title={`${status.conflicts} conflit(s)`}>
+          Note(s) modifiée(s) sur deux appareils : l&apos;autre version est conservée dans une
+          « copie de conflit ».
+        </Notice>
       )}
       {status.state === 'error' && (
-        <ThemedText themeColor="danger" type="small">
+        <Notice tone="danger" title="Synchronisation en échec">
           {status.error}
-        </ThemedText>
+        </Notice>
       )}
-      <Button
-        label="Synchroniser maintenant"
-        disabled={status.state === 'syncing' || status.state === 'off'}
-        onPress={syncNow}
-      />
-      <Button label="Désactiver la synchronisation" onPress={deactivate} />
-    </View>
+    </>
   );
 }

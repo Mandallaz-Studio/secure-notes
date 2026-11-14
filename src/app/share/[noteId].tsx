@@ -3,11 +3,15 @@ import { Stack, useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Share, StyleSheet, View } from 'react-native';
 
+import { Copy, Link2, Share2 } from 'lucide-react-native';
+
 import { Button } from '@/components/button';
+import { EmptyState } from '@/components/empty-state';
+import { Notice } from '@/components/notice';
 import { confirmDestructive } from '@/components/confirm';
 import { Screen } from '@/components/screen';
 import { ThemedText } from '@/components/themed-text';
-import { Spacing } from '@/constants/theme';
+import { Radius, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { fromBase64, generateKey, toBase64 } from '@/crypto/aead';
 import { newId } from '@/notes/model';
@@ -95,10 +99,10 @@ export default function ShareScreen() {
     return (
       <Screen>
         <Stack.Screen options={{ title: 'Partage par lien' }} />
-        <ThemedText themeColor="textSecondary">
+        <Notice tone="info" title="Synchronisation requise">
           Le partage par lien dépose une copie chiffrée de la note sur le serveur : activez
           d’abord la synchronisation dans les réglages.
-        </ThemedText>
+        </Notice>
       </Screen>
     );
   }
@@ -149,13 +153,13 @@ export default function ShareScreen() {
   return (
     <Screen>
       <Stack.Screen options={{ title: all ? 'Liens de partage' : 'Partage par lien' }} />
-      <ThemedText themeColor="textSecondary">
+      <Notice tone="secure" title="La clé reste dans le lien">
         Un lien donne accès à une copie de la note telle qu’elle est au moment du partage, sans
         ses fichiers joints. Toute personne qui a le lien peut la lire ; la clé de déchiffrement
-        est dans le lien lui-même et n’est jamais envoyée au serveur.
-      </ThemedText>
+        n’est jamais envoyée au serveur.
+      </Notice>
       {SHARE_SITE === '' && (
-        <ThemedText type="small" themeColor="textSecondary">
+        <ThemedText type="callout" themeColor="inkMuted">
           Aucun site de lecture n’est configuré : les liens ne s’ouvrent que sur un appareil où
           Secure Notes est installée.
         </ThemedText>
@@ -163,44 +167,56 @@ export default function ShareScreen() {
       {!all && (
         <Button
           label={busy ? 'Création…' : 'Créer un lien'}
+          icon={Link2}
           variant="primary"
           disabled={busy}
           onPress={() => void create()}
         />
       )}
-      {error && <ThemedText themeColor="danger">{error}</ThemedText>}
-      {rows === null && !error && <ThemedText themeColor="textSecondary">Chargement…</ThemedText>}
+      {error && <Notice tone="danger">{error}</Notice>}
+      {rows === null && !error && <ThemedText themeColor="inkMuted">Chargement…</ThemedText>}
       {rows?.length === 0 && (
-        <ThemedText themeColor="textSecondary">
-          {all ? 'Aucun lien actif.' : 'Aucun lien actif pour cette note.'}
-        </ThemedText>
+        <EmptyState
+          icon={Link2}
+          title={all ? 'Aucun lien actif' : 'Aucun lien actif pour cette note'}
+        />
       )}
       {rows?.map((row) => (
-        <View key={row.id} style={[styles.row, { borderColor: theme.border }]}>
+        <View
+          key={row.id}
+          style={[styles.row, { borderColor: theme.border, backgroundColor: theme.surface }]}>
           {all && (
-            <ThemedText type="subtitle" numberOfLines={1}>
+            <ThemedText type="headline" numberOfLines={1}>
               {row.title === '' ? 'Sans titre' : row.title}
             </ThemedText>
           )}
-          <ThemedText type="small" themeColor="textSecondary">
+          <ThemedText type="caption" themeColor="inkSubtle">
             Créé le {new Date(row.createdAt).toLocaleString('fr-FR')}
           </ThemedText>
-          <ThemedText type="code" numberOfLines={2} selectable>
+          <ThemedText
+            type="code"
+            themeColor="inkMuted"
+            numberOfLines={2}
+            selectable
+            style={[styles.link, { backgroundColor: theme.surfaceSunken }]}>
             {row.link}
           </ThemedText>
           <View style={styles.actions}>
-            <View style={styles.flex}>
-              <Button
-                label={copied === row.id ? 'Copié' : 'Copier'}
-                onPress={() => void copy(row)}
-              />
-            </View>
-            <View style={styles.flex}>
-              <Button label="Envoyer" onPress={() => void Share.share({ message: row.link })} />
-            </View>
-            <View style={styles.flex}>
-              <Button label="Révoquer" variant="danger" onPress={() => void revoke(row)} />
-            </View>
+            <Button
+              size="sm"
+              icon={Copy}
+              label={copied === row.id ? 'Copié' : 'Copier'}
+              onPress={() => void copy(row)}
+            />
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={Share2}
+              label="Envoyer"
+              onPress={() => void Share.share({ message: row.link })}
+            />
+            <View style={styles.flex} />
+            <Button size="sm" variant="danger" label="Révoquer" onPress={() => void revoke(row)} />
           </View>
         </View>
       ))}
@@ -212,9 +228,10 @@ const styles = StyleSheet.create({
   row: {
     gap: Spacing.two,
     padding: Spacing.three,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 12,
+    borderWidth: 1,
+    borderRadius: Radius.lg,
   },
-  actions: { flexDirection: 'row', gap: Spacing.two },
+  link: { padding: Spacing.two, borderRadius: Radius.sm, overflow: 'hidden' },
+  actions: { flexDirection: 'row', gap: Spacing.two, alignItems: 'center' },
   flex: { flex: 1 },
 });
