@@ -62,6 +62,55 @@ PostgreSQL ; rien n'a été essayé sur l'émulateur.
 recréation échoue avec elle, le nouveau a besoin d'elle) ; publier un nouvel
 export web pour la page de lecture.
 
+### Nouvelle fonction : envoi d'un lien par QR code (2026-11-15)
+
+Un navigateur (extension `extension/`) ou une autre app affiche un QR code
+(« Recevoir une note ») ; le téléphone le scanne depuis l'écran de partage
+d'une note et y envoie un lien existant. Protocole : `src/share/handoff.ts`.
+
+| Point | Choix |
+|---|---|
+| Contenu du QR code | Secret de 256 bits + clé publique X25519 éphémère de l'afficheur (`SN1R:…`, pas une adresse : aucune app ne l'ouvre seule). Ni l'un ni l'autre ne passe par le serveur : il ne peut pas substituer sa propre clé. |
+| Chiffrement | Deux couches. XChaCha20-Poly1305 sous une clé dérivée du secret (BLAKE2b), données associées = canal et clé publique ; puis `crypto_box_seal` vers la clé publique. La couche symétrique authentifie l'expéditeur et résiste à un ordinateur quantique (le secret ne transite jamais) ; la couche asymétrique protège de qui n'aurait que photographié le QR code. Premier usage de cryptographie asymétrique dans l'app, **en plus** du symétrique, jamais à sa place. |
+| Bourrage | Message bourré à 1 Kio au moins : la présence d'une instance dans le lien ne se voit pas à la taille. |
+| Serveur | Table `handoffs` (migration `20261118000000_handoffs.sql`). Dépôt par un compte connecté seulement (celui qui partage, synchro active), compte ouvert, une fois par identifiant (premier arrivé), 20 dépôts en attente au plus, 4 096 caractères au plus. Relève publique par identifiant (`take_handoff`), qui supprime la ligne ; rien n'est servi après 5 minutes. **Aucune écriture anonyme nouvelle.** |
+| Identifiant de canal | Empreinte du secret : impossible à deviner sans avoir vu le QR code, et ne révèle pas le secret. |
+| Réception | Le lien reçu est validé (identifiant UUID, clé de 256 bits, instance en https), puis reconstruit sur le site de lecture fixé à la compilation (extension) ou ouvert par `/s/<id>` avec ses avertissements habituels (app). Aucune adresse reçue n'est ouverte telle quelle. |
+| Secrets en mémoire | Effacés à la réception, à l'expiration, à la fermeture de la fenêtre ou de l'écran. Écran « Recevoir » protégé des captures. Le lien à envoyer passe de l'écran de partage à l'écran de scan en mémoire seulement, pas dans les paramètres de navigation. |
+| App | Appareil photo demandé à l'usage (scan seulement), aucune image gardée. `RECORD_AUDIO` retiré du manifeste (`blockedPermissions`), pas de clé micro sur iOS. Sans synchronisation, « Recevoir » demande avant de contacter le serveur. |
+| Extension | Permission `storage` seulement, aucune permission d'hôte ni script de contenu, CSP `default-src 'none'`. |
+
+Vérifié : 15 tests Jest (aller-retour, autre QR code, message altéré, message
+scellé sans le secret, secrets effacés, liens invalides refusés, bourrage,
+relève et dépôt HTTP) ; la fenêtre de l'extension dans un navigateur
+(Chromium), avec un serveur simulé : relève, réception d'un message scellé
+par le code du téléphone, ouverture du bon lien, refus d'un message forgé.
+
+Vérifié aussi sur l'instance de production (migration appliquée le
+2026-11-15) : avec la clé publique, `take_handoff` répond `null`, et
+l'écriture comme la lecture directes de `handoffs` sont refusées (42501).
+De bout en bout sur l'émulateur Android : l'appareil photo a lu le QR code
+d'un récepteur (même code que l'extension, exécuté sous Node), l'app a
+déposé le lien, le récepteur l'a relevé (une seconde relève répond `null`),
+l'a ouvert, puis a déchiffré la note partagée avec la clé reçue.
+
+**Non vérifié :** le paquet de l'extension n'a été chargé ni dans Chrome ni
+dans Firefox (CSP et manifeste non éprouvés) ; la réception par une autre
+app avec un vrai dépôt (l'écran affiche le code et relève, mais rien n'y a
+été envoyé).
+
+**Risques résiduels :**
+- Qui photographie le QR code peut, avant le téléphone, déposer un faux lien
+  (il lui faut un compte sur l'instance, ouverte à l'inscription) : le
+  navigateur ouvrirait alors une note de son choix, sur le vrai site de
+  lecture. Même risque que l'auteur non authentifié d'un lien (point 2). Il
+  peut aussi relever le message avant l'afficheur, sans pouvoir le lire.
+- Une page web peut imiter la fenêtre de l'extension et son QR code : le
+  téléphone enverrait alors le lien à cette page. Seul l'utilisateur sait
+  quel écran il scanne (rappel affiché sur l'écran de scan).
+- Le serveur voit qu'un compte a envoyé un lien, quand, et l'adresse IP du
+  navigateur qui le relève.
+
 ## Restant
 
 ### Moyen

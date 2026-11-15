@@ -12,6 +12,7 @@ import {
   Monitor,
   Moon,
   PenLine,
+  QrCode,
   RefreshCw,
   Sun,
   Trash2,
@@ -90,7 +91,7 @@ export default function SettingsScreen() {
 
         <ListGroup
           title="Partage"
-          footer="Les liens créés depuis une note restent actifs jusqu’à leur révocation, ou jusqu’à la mise à la corbeille de la note.">
+          footer="Les liens créés depuis une note restent actifs jusqu’à leur révocation, ou jusqu’à la mise à la corbeille de la note. Pour recevoir une note d’un autre appareil, affichez un QR code et scannez-le depuis le partage de la note.">
           <ListRow
             icon={LinkIcon}
             label="Liens de partage"
@@ -98,6 +99,12 @@ export default function SettingsScreen() {
             onPress={() =>
               router.push({ pathname: '/share/[noteId]', params: { noteId: 'all' } })
             }
+          />
+          <ListRow
+            icon={QrCode}
+            label="Recevoir une note"
+            chevron
+            onPress={() => router.push('/receive')}
           />
         </ListGroup>
 

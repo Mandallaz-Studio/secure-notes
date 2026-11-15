@@ -553,6 +553,26 @@ export class SupabaseRemote implements SyncRemote, BlobRemote {
     return typeof row?.ciphertext === 'string' ? row.ciphertext : null;
   }
 
+  // --- Envoi par QR code -----------------------------------------------------
+
+  /**
+   * Dépose un lien chiffré pour l'afficheur d'un QR code (voir `src/share/handoff.ts`).
+   * @throws SyncError si ce QR code a déjà servi, ou si trop de dépôts attendent.
+   */
+  async createHandoff(channel: string, payload: string): Promise<void> {
+    const reply = await this.rest('POST', '/handoffs', { id: channel, payload });
+    if (reply.status === 201) return;
+    if (reply.status === 409) {
+      throw new SyncError('Ce QR code a déjà servi : affichez-en un nouveau.');
+    }
+    const message = ((reply.body ?? {}) as Json).message;
+    if (typeof message === 'string' && message.includes('handoff_limit')) {
+      throw new SyncError('Trop d’envois en attente : réessayez dans quelques minutes.');
+    }
+    if (reply.status === 404) SupabaseRemote.failOutdated('envoi par QR code absent');
+    SupabaseRemote.fail(reply);
+  }
+
   // --- Fermeture du compte ---------------------------------------------------
 
   /**

@@ -98,6 +98,8 @@ function Navigation() {
             <Stack.Screen name="private" options={{ title: 'Dossier privé' }} />
             <Stack.Screen name="recreate" options={{ title: 'Recréer le coffre' }} />
             <Stack.Screen name="share/[noteId]" options={{ title: 'Partage par lien' }} />
+            <Stack.Screen name="scan" options={{ title: 'Envoyer par QR code' }} />
+            <Stack.Screen name="receive" options={{ title: 'Recevoir une note' }} />
             <Stack.Screen name="dev/crypto" options={{ title: 'Essai chiffrement' }} />
             <Stack.Screen name="dev/editor" options={{ title: 'Essai éditeur' }} />
           </Stack.Protected>

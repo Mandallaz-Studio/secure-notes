@@ -1,16 +1,15 @@
-import {
-  decrypt,
-  encrypt,
-  fromBase64,
-  KEY_BYTES,
-  toBase64,
-  utf8Decode,
-  utf8Encode,
-} from '@/crypto/aead';
+import { decrypt, encrypt, fromBase64, toBase64, utf8Decode, utf8Encode } from '@/crypto/aead';
 import { padJson } from '@/crypto/padding';
 import { newImageCache, toEditorImages } from '@/notes/blobs';
 import { docOfContent, type RichNode } from '@/notes/rich-text';
 import type { Note, NoteStore } from '@/notes/types';
+
+export {
+  buildShareLink,
+  isShareId,
+  parseShareFragment,
+  type ShareInstance,
+} from '@/share/link';
 
 /**
  * Partage d'une note par lien.
@@ -42,18 +41,11 @@ export type ShareMeta = {
   title: string;
 };
 
-export type ShareInstance = { url: string; anonKey: string };
-
 /** Erreur de partage dont le message peut être montré tel quel. */
 export class ShareError extends Error {}
 
 /** Taille maximale de la copie partagée, avant chiffrement. */
 export const MAX_SHARE_BYTES = 4 * 1024 * 1024;
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-
-export const isShareId = (value: unknown): value is string =>
-  typeof value === 'string' && UUID.test(value);
 
 const noteContext = (id: string) => `sn1:share:${id}`;
 const metaContext = (id: string) => `sn1:sharemeta:${id}`;
@@ -171,48 +163,3 @@ export function openShareMeta(id: string, sealed: string, wrapKey: Uint8Array): 
   }
 }
 
-/**
- * @param base Adresse du site de lecture (`https://notes.exemple.fr`) ou
- *   schéma de l'app (`securenotes://`).
- * @param instance À préciser si le destinataire ne peut pas la deviner :
- *   instance autre que celle prévue à la compilation.
- */
-export function buildShareLink(
-  base: string,
-  id: string,
-  shareKey: Uint8Array,
-  instance: ShareInstance | null,
-): string {
-  const root = base.endsWith('://') ? base : `${base.replace(/\/+$/, '')}/`;
-  const where = instance
-    ? `.${toBase64(utf8Encode(JSON.stringify([instance.url, instance.anonKey])))}`
-    : '';
-  return `${root}s/${id}#${toBase64(shareKey)}${where}`;
-}
-
-/** Lit le fragment d'un lien ; `null` s'il est incomplet ou malformé. */
-export function parseShareFragment(
-  fragment: string,
-): { key: Uint8Array; instance: ShareInstance | null } | null {
-  try {
-    const [keyPart, instancePart, ...rest] = fragment.replace(/^#/, '').split('.');
-    if (rest.length > 0) return null;
-    const key = fromBase64(keyPart);
-    if (key.length !== KEY_BYTES) return null;
-    if (instancePart === undefined) return { key, instance: null };
-    const pair: unknown = JSON.parse(utf8Decode(fromBase64(instancePart)));
-    if (
-      !Array.isArray(pair) ||
-      pair.length !== 2 ||
-      typeof pair[0] !== 'string' ||
-      typeof pair[1] !== 'string' ||
-      // La page de lecture ne parle qu'en HTTPS.
-      !/^https:\/\/[^/?#\s]+[^?#\s]*$/i.test(pair[0])
-    ) {
-      return null;
-    }
-    return { key, instance: { url: pair[0], anonKey: pair[1] } };
-  } catch {
-    return null;
-  }
-}

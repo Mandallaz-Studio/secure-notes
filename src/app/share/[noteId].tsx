@@ -1,8 +1,8 @@
-import { Stack, useLocalSearchParams } from 'expo-router';
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Share, StyleSheet, View } from 'react-native';
 
-import { Copy, Link2, Share2 } from 'lucide-react-native';
+import { Copy, Link2, ScanQrCode, Share2 } from 'lucide-react-native';
 
 import { Button } from '@/components/button';
 import { EmptyState } from '@/components/empty-state';
@@ -24,6 +24,8 @@ import {
   ShareError,
 } from '@/share/codec';
 import { instanceForLink, SHARE_LINK_BASE, SHARE_SITE } from '@/share/config';
+import { splitShareLink } from '@/share/link';
+import { setOutgoingLink } from '@/share/outbox';
 import { copySensitive } from '@/security/secret-clipboard';
 import { QuotaExceededError } from '@/sync/blobs';
 import { useSync } from '@/sync/sync-context';
@@ -51,6 +53,7 @@ export default function ShareScreen() {
   const { noteId } = useLocalSearchParams<{ noteId: string }>();
   const all = noteId === 'all';
   const theme = useTheme();
+  const router = useRouter();
   const { keys } = useVault();
   const { store } = useNotes();
   const { remote, config } = useSync();
@@ -145,6 +148,14 @@ export default function ShareScreen() {
     }
   };
 
+  const sendByQr = (row: ShareRow) => {
+    const parts = splitShareLink(row.link);
+    if (!parts) return;
+    // En mémoire seulement : le lien ne passe pas par les paramètres de navigation.
+    setOutgoingLink({ ...parts, title: row.title });
+    router.push('/scan');
+  };
+
   const copy = async (row: ShareRow) => {
     // Le lien contient la clé de la note.
     await copySensitive(row.link);
@@ -216,8 +227,16 @@ export default function ShareScreen() {
               label="Envoyer"
               onPress={() => void Share.share({ message: row.link })}
             />
-            <View style={styles.flex} />
-            <Button size="sm" variant="danger" label="Révoquer" onPress={() => void revoke(row)} />
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={ScanQrCode}
+              label="QR code"
+              onPress={() => sendByQr(row)}
+            />
+            <View style={styles.revoke}>
+              <Button size="sm" variant="danger" label="Révoquer" onPress={() => void revoke(row)} />
+            </View>
           </View>
         </View>
       ))}
@@ -233,6 +252,6 @@ const styles = StyleSheet.create({
     borderRadius: Radius.lg,
   },
   link: { padding: Spacing.two, borderRadius: Radius.sm, overflow: 'hidden' },
-  actions: { flexDirection: 'row', gap: Spacing.two, alignItems: 'center' },
-  flex: { flex: 1 },
+  actions: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.two, alignItems: 'center' },
+  revoke: { marginLeft: 'auto' },
 });

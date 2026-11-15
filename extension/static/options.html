@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Réglages — Secure Notes</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="options">
+    <main>
+      <h1>Serveur</h1>
+      <p class="muted">
+        Le téléphone dépose le lien sur le serveur où il se synchronise ; cette extension doit
+        relever au même endroit. Laissez vide pour utiliser le serveur de Secure Notes
+        (<span id="default-host"></span>).
+      </p>
+
+      <form id="form" novalidate>
+        <label for="url">Adresse de l’instance</label>
+        <input id="url" name="url" type="url" inputmode="url" autocomplete="off"
+          spellcheck="false" placeholder="https://xyz.supabase.co" />
+
+        <label for="anon-key">Clé publique (anon)</label>
+        <input id="anon-key" name="anon-key" type="text" autocomplete="off" spellcheck="false" />
+
+        <div id="message" class="notice" role="status" hidden></div>
+
+        <div class="actions">
+          <button type="submit" class="button primary">Enregistrer</button>
+          <button id="reset" type="button" class="button">Serveur par défaut</button>
+        </div>
+      </form>
+
+      <p class="fine">
+        Un serveur autre que celui de Secure Notes ne voit pas plus le contenu des liens, mais
+        apprend l’adresse IP de ce navigateur. Les notes reçues s’ouvrent toujours sur
+        <span id="site"></span>.
+      </p>
+    </main>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

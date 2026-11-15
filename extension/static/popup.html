@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Recevoir une note</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="popup">
+    <header class="brand">
+      <svg class="logo" viewBox="0 0 64 64" aria-hidden="true">
+        <path class="logo-shackle" d="M21 27V20a11 11 0 0 1 22 0v7" />
+        <rect class="logo-body" x="10" y="25" width="44" height="33" rx="8" />
+        <rect class="logo-line" x="19" y="34" width="26" height="3.5" rx="1.75" />
+        <rect class="logo-line" x="19" y="40.25" width="26" height="3.5" rx="1.75" />
+        <rect class="logo-line" x="19" y="46.5" width="15" height="3.5" rx="1.75" />
+      </svg>
+      <span>Secure Notes</span>
+    </header>
+
+    <main>
+      <h1>Recevoir une note</h1>
+
+      <div class="qr-card">
+        <svg id="qr" role="img" aria-label="QR code de réception"></svg>
+        <div id="veil" class="veil" hidden>
+          <p id="veil-text"></p>
+          <button id="renew" type="button" class="button primary">Nouveau code</button>
+        </div>
+      </div>
+
+      <p id="status" class="status" role="status">Préparation…</p>
+
+      <div id="error" class="notice danger" role="alert" hidden></div>
+
+      <ol class="steps">
+        <li>Dans Secure Notes, ouvrez la note à envoyer.</li>
+        <li>Touchez <strong>Partager</strong>, puis <strong>QR code</strong> sur un lien.</li>
+        <li>Scannez ce code : la note s’ouvre dans un nouvel onglet.</li>
+      </ol>
+
+      <p class="fine">
+        Chiffré de bout en bout : le serveur ne voit pas le lien. Ce code sert une fois et
+        disparaît à la fermeture de cette fenêtre.
+      </p>
+    </main>
+
+    <footer>
+      <span id="server" class="server"></span>
+      <button id="options" type="button" class="button ghost small">Réglages</button>
+    </footer>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

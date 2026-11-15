@@ -1,5 +1,5 @@
 import { Link } from 'expo-router';
-import { Settings } from 'lucide-react-native';
+import { QrCode, Settings } from 'lucide-react-native';
 import { StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -23,9 +23,14 @@ export default function NotesScreen() {
               <ThemedText type="display" accessibilityRole="header">
                 Notes
               </ThemedText>
-              <Link href="/settings" asChild>
-                <IconButton icon={Settings} label="Réglages" />
-              </Link>
+              <View style={styles.headerActions}>
+                <Link href="/receive" asChild>
+                  <IconButton icon={QrCode} label="Recevoir une note" />
+                </Link>
+                <Link href="/settings" asChild>
+                  <IconButton icon={Settings} label="Réglages" />
+                </Link>
+              </View>
             </View>
             <SyncStatus />
           </View>
@@ -39,4 +44,5 @@ const styles = StyleSheet.create({
   container: { flex: 1, alignItems: 'center' },
   header: { paddingHorizontal: Spacing.three, paddingTop: Spacing.two, gap: Spacing.half },
   titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginRight: -Spacing.two },
+  headerActions: { flexDirection: 'row', gap: Spacing.one },
 });

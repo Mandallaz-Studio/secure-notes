@@ -20,6 +20,7 @@
       },
       "predictiveBackGestureEnabled": false,
       "allowBackup": false,
+      "blockedPermissions": ["android.permission.RECORD_AUDIO"],
       "package": "com.mandallazstudio.securenotes"
     },
     "web": {
@@ -54,6 +55,14 @@
         }
       ],
       "expo-sharing",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Secure Notes utilise l’appareil photo pour scanner les QR codes d’envoi de notes.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false
+        }
+      ],
       "./plugins/with-release-signing"
     ],
     "experiments": {
